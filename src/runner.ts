@@ -5,12 +5,16 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import type { DelegateProfile } from "./agents.ts";
+import { createProcessTreeController, type ProcessTreeController } from "./process-tree.ts";
 import { ProtocolLineTooLargeError, ProtocolParser } from "./protocol.ts";
 
 export const MAX_FINAL_TEXT_BYTES = 50 * 1024;
 export const MAX_STDERR_BYTES = 64 * 1024;
 const DEFAULT_CLEANUP_GRACE_MS = 2_000;
+const DEFAULT_CLEANUP_VERIFY_MS = 1_000;
 const DEFAULT_EXIT_DRAIN_MS = 250;
+const DEFAULT_SEMANTIC_DRAIN_MS = 250;
+const PIPE_CLOSE_VERIFY_MS = 50;
 
 export function isSupportedPlatform(platform: NodeJS.Platform): boolean {
   return platform === "darwin" || platform === "linux";
@@ -25,6 +29,23 @@ export type DelegateFailureCode =
   | "child_error"
   | "missing_terminal_answer";
 
+export interface CleanupDetails {
+  readonly forced: boolean;
+  readonly termSent: boolean;
+  readonly killSent: boolean;
+  readonly processExited: boolean;
+  readonly pipesClosed: boolean;
+  readonly diagnostic?: string;
+}
+
+const NO_CLEANUP: CleanupDetails = Object.freeze({
+  forced: false,
+  termSent: false,
+  killSent: false,
+  processExited: false,
+  pipesClosed: true,
+});
+
 export interface DelegateSuccess {
   readonly ok: true;
   readonly text: string;
@@ -33,6 +54,7 @@ export interface DelegateSuccess {
   readonly originalBytes?: number;
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
+  readonly cleanup: CleanupDetails;
 }
 
 export interface DelegateFailure {
@@ -43,6 +65,7 @@ export interface DelegateFailure {
   readonly stderr: string;
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
+  readonly cleanup: CleanupDetails;
 }
 
 export type DelegateOutcome = DelegateSuccess | DelegateFailure;
@@ -57,13 +80,18 @@ export interface RunDelegateOptions {
   /** Private lifecycle tuning for deterministic process fixtures. */
   readonly cleanupGraceMs?: number;
   /** Private lifecycle tuning for deterministic process fixtures. */
+  readonly cleanupVerifyMs?: number;
+  /** Private lifecycle tuning for deterministic process fixtures. */
   readonly exitDrainMs?: number;
+  /** Private lifecycle tuning for deterministic process fixtures. */
+  readonly semanticDrainMs?: number;
   /** Private child environment override for deterministic process fixtures. */
   readonly env?: NodeJS.ProcessEnv;
 }
 
 type FinalizeReason =
-  | { readonly type: "process_done" }
+  | { readonly type: "process_done"; readonly forcedPipeDrain: boolean }
+  | { readonly type: "semantic_done" }
   | { readonly type: "spawn_failed"; readonly error: unknown }
   | { readonly type: "cancelled" }
   | { readonly type: "run_timeout" }
@@ -190,6 +218,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      cleanup: NO_CLEANUP,
     };
   }
 
@@ -202,6 +231,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      cleanup: NO_CLEANUP,
     };
   }
 
@@ -222,6 +252,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
         stderr: "",
         malformedLineCount: 0,
         exitCode: null,
+        cleanup: NO_CLEANUP,
       };
     }
     return {
@@ -235,6 +266,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      cleanup: NO_CLEANUP,
     };
   }
   const temporaryPrompt = promptSetup.prompt;
@@ -249,6 +281,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      cleanup: NO_CLEANUP,
     };
   }
 
@@ -262,6 +295,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      cleanup: NO_CLEANUP,
     };
   }
 
@@ -286,17 +320,20 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
 
   return new Promise<DelegateOutcome>((resolve) => {
     let child: ChildProcess | undefined;
+    let processTree: ProcessTreeController | undefined;
     let finalizing = false;
     let acceptingOutput = true;
+    let semanticCompletionObserved = false;
     let exitObserved = false;
     let pipesClosed = false;
     let exitCode: number | null = null;
     let stderrTail: Buffer = Buffer.alloc(0);
     let runTimer: NodeJS.Timeout | undefined;
     let exitDrainTimer: NodeJS.Timeout | undefined;
-    let resolveExit: (() => void) | undefined;
-    const exitPromise = new Promise<void>((exitResolve) => {
-      resolveExit = exitResolve;
+    let semanticDrainTimer: NodeJS.Timeout | undefined;
+    let resolvePipesClosed: (() => void) | undefined;
+    const pipesClosedPromise = new Promise<void>((resolveClose) => {
+      resolvePipesClosed = resolveClose;
     });
 
     const parser = new ProtocolParser({
@@ -307,41 +344,44 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     });
 
     const cleanupGraceMs = options.cleanupGraceMs ?? DEFAULT_CLEANUP_GRACE_MS;
+    const cleanupVerifyMs = options.cleanupVerifyMs ?? DEFAULT_CLEANUP_VERIFY_MS;
     const exitDrainMs = options.exitDrainMs ?? DEFAULT_EXIT_DRAIN_MS;
+    const semanticDrainMs = options.semanticDrainMs ?? DEFAULT_SEMANTIC_DRAIN_MS;
 
     const onAbort = () => {
       void finalize({ type: "cancelled" });
     };
 
-    const settleFromProcess = (): void => {
+    const settleFromProcess = (forcedPipeDrain: boolean): void => {
       try {
         parser.finish();
       } catch (error) {
         void finalize({ type: "protocol_error", error });
         return;
       }
-      void finalize({ type: "process_done" });
+      void finalize({ type: "process_done", forcedPipeDrain });
     };
 
-    const terminateDirectChild = async (): Promise<void> => {
-      if (!child || exitObserved) return;
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // Finalization remains bounded even when signaling fails.
+    const armSemanticDrain = (): void => {
+      if (semanticDrainTimer || finalizing) return;
+      if (
+        parser.state.finalText === undefined &&
+        parser.state.assistantError === undefined &&
+        !parser.state.agentSettled
+      ) {
+        return;
       }
-
-      let graceTimer: NodeJS.Timeout | undefined;
-      await Promise.race([
-        exitPromise,
-        new Promise<void>((graceResolve) => {
-          graceTimer = setTimeout(graceResolve, cleanupGraceMs);
-        }),
-      ]);
-      if (graceTimer) clearTimeout(graceTimer);
+      if (Date.now() >= deadlineAt) {
+        void finalize({ type: "run_timeout" });
+        return;
+      }
+      semanticCompletionObserved = true;
+      semanticDrainTimer = setTimeout(() => {
+        void finalize({ type: "semantic_done" });
+      }, semanticDrainMs);
     };
 
-    const makeProcessOutcome = (): DelegateOutcome => {
+    const makeProcessOutcome = (cleanup: CleanupDetails): DelegateOutcome => {
       const durationMs = Date.now() - startedAt;
       const stderr = stderrTail.toString("utf8");
       if (parser.state.assistantError) {
@@ -353,6 +393,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
           stderr,
           malformedLineCount: parser.state.malformedLineCount,
           exitCode,
+          cleanup,
         };
       }
       if (parser.state.finalText !== undefined) {
@@ -365,6 +406,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
           ...(final.originalBytes === undefined ? {} : { originalBytes: final.originalBytes }),
           malformedLineCount: parser.state.malformedLineCount,
           exitCode,
+          cleanup,
         };
       }
       return {
@@ -375,6 +417,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
         stderr,
         malformedLineCount: parser.state.malformedLineCount,
         exitCode,
+        cleanup,
       };
     };
 
@@ -384,23 +427,47 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       acceptingOutput = false;
       if (runTimer) clearTimeout(runTimer);
       if (exitDrainTimer) clearTimeout(exitDrainTimer);
+      if (semanticDrainTimer) clearTimeout(semanticDrainTimer);
       options.signal?.removeEventListener("abort", onAbort);
 
-      if (reason.type !== "process_done" && reason.type !== "spawn_failed") {
-        await terminateDirectChild();
-      }
-
+      const pipesNeededForcing = child !== undefined && !pipesClosed;
+      const termination = await processTree?.terminate();
       child?.stdout?.destroy();
       child?.stderr?.destroy();
+      if (child && !pipesClosed) {
+        let pipeCloseTimer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          pipesClosedPromise,
+          new Promise<void>((resolveWait) => {
+            pipeCloseTimer = setTimeout(resolveWait, PIPE_CLOSE_VERIFY_MS);
+          }),
+        ]);
+        if (pipeCloseTimer) clearTimeout(pipeCloseTimer);
+      }
       if (child && !exitObserved) child.unref();
       await removeTemporaryPrompt(temporaryPrompt.directory);
+
+      const cleanup: CleanupDetails = {
+        forced:
+          reason.type === "semantic_done" ||
+          (reason.type === "process_done" && reason.forcedPipeDrain) ||
+          pipesNeededForcing ||
+          termination?.termSent === true ||
+          termination?.killSent === true,
+        termSent: termination?.termSent ?? false,
+        killSent: termination?.killSent ?? false,
+        processExited: exitObserved || termination?.processGroupGone === true,
+        pipesClosed: child === undefined || pipesClosed,
+        ...(termination?.diagnostic === undefined ? {} : { diagnostic: termination.diagnostic }),
+      };
 
       const durationMs = Date.now() - startedAt;
       const stderr = stderrTail.toString("utf8");
       let outcome: DelegateOutcome;
       switch (reason.type) {
         case "process_done":
-          outcome = makeProcessOutcome();
+        case "semantic_done":
+          outcome = makeProcessOutcome(cleanup);
           break;
         case "spawn_failed":
           outcome = {
@@ -411,6 +478,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            cleanup,
           };
           break;
         case "cancelled":
@@ -422,6 +490,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            cleanup,
           };
           break;
         case "run_timeout":
@@ -433,6 +502,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            cleanup,
           };
           break;
         case "protocol_error":
@@ -447,6 +517,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            cleanup,
           };
           break;
       }
@@ -464,6 +535,12 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
         stdio: ["ignore", "pipe", "pipe"],
       });
       child = spawned;
+      if (spawned.pid !== undefined) {
+        processTree = createProcessTreeController(spawned.pid, {
+          termGraceMs: cleanupGraceMs,
+          killVerifyMs: cleanupVerifyMs,
+        });
+      }
     } catch (error) {
       void finalize({ type: "spawn_failed", error });
       return;
@@ -473,6 +550,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       if (!acceptingOutput) return;
       try {
         parser.push(data);
+        armSemanticDrain();
       } catch (error) {
         void finalize({ type: "protocol_error", error });
       }
@@ -490,17 +568,19 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     spawned.once("exit", (code) => {
       exitObserved = true;
       exitCode = code;
-      resolveExit?.();
-      if (!pipesClosed && !finalizing) exitDrainTimer = setTimeout(settleFromProcess, exitDrainMs);
+      if (!pipesClosed && !finalizing) {
+        exitDrainTimer = setTimeout(() => settleFromProcess(true), exitDrainMs);
+      }
     });
 
     spawned.once("close", () => {
       pipesClosed = true;
-      settleFromProcess();
+      resolvePipesClosed?.();
+      settleFromProcess(false);
     });
 
     runTimer = setTimeout(() => {
-      void finalize({ type: "run_timeout" });
+      void finalize(semanticCompletionObserved ? { type: "semantic_done" } : { type: "run_timeout" });
     }, Math.max(0, deadlineAt - Date.now()));
     if (options.signal) {
       options.signal.addEventListener("abort", onAbort, { once: true });

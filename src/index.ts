@@ -9,6 +9,7 @@ import { getDelegateProfile } from "./agents.ts";
 import {
   MAX_FINAL_TEXT_BYTES,
   runDelegate,
+  type CleanupDetails,
   type DelegateFailure,
   type DelegateSuccess,
 } from "./runner.ts";
@@ -44,12 +45,16 @@ export interface DelegateDetails {
   readonly originalBytes?: number;
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
+  readonly cleanup: CleanupDetails;
 }
 
 function formatFailure(failure: DelegateFailure): string {
   const stderr = failure.stderr.trim();
-  const diagnostic = stderr ? `\nStderr tail:\n${stderr}` : "";
-  return `Scout delegate failed [${failure.code}] after ${failure.durationMs} ms: ${failure.message}${diagnostic}`;
+  const stderrDiagnostic = stderr ? `\nStderr tail:\n${stderr}` : "";
+  const cleanupDiagnostic = failure.cleanup.diagnostic
+    ? `\nCleanup diagnostic: ${failure.cleanup.diagnostic}`
+    : "";
+  return `Scout delegate failed [${failure.code}] after ${failure.durationMs} ms: ${failure.message}${stderrDiagnostic}${cleanupDiagnostic}`;
 }
 
 function successDetails(result: DelegateSuccess, model: string | undefined): DelegateDetails {
@@ -62,6 +67,7 @@ function successDetails(result: DelegateSuccess, model: string | undefined): Del
     ...(result.originalBytes === undefined ? {} : { originalBytes: result.originalBytes }),
     malformedLineCount: result.malformedLineCount,
     exitCode: result.exitCode,
+    cleanup: result.cleanup,
   };
 }
 
@@ -118,6 +124,13 @@ export default function piDelegator(pi: ExtensionAPI): void {
                     truncated: Buffer.byteLength(text, "utf8") > MAX_FINAL_TEXT_BYTES,
                     malformedLineCount: 0,
                     exitCode: null,
+                    cleanup: {
+                      forced: false,
+                      termSent: false,
+                      killSent: false,
+                      processExited: false,
+                      pipesClosed: false,
+                    },
                   },
                 });
               },

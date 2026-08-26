@@ -28,6 +28,18 @@ function fixtureEnv(scenario, extra = {}) {
   };
 }
 
+async function waitForFile(path, timeoutMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      return await readFile(path, "utf8");
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+    }
+  }
+}
+
 test("returns a clean terminal answer and launches Scout with isolated arguments", async () => {
   await withTempDir(async (cwd) => {
     const recordPath = join(cwd, "args.json");
@@ -52,6 +64,13 @@ test("returns a clean terminal answer and launches Scout with isolated arguments
     assert.equal(result.ok, true);
     assert.equal(result.text, "Scout result");
     assert.deepEqual(updates, ["Scout result"]);
+    assert.deepEqual(result.cleanup, {
+      forced: false,
+      termSent: false,
+      killSent: false,
+      processExited: true,
+      pipesClosed: true,
+    });
 
     const args = JSON.parse(await readFile(recordPath, "utf8"));
     assert.deepEqual(args.slice(0, 6), ["--mode", "json", "--print", "--no-session", "--no-extensions", "--no-skills"]);
@@ -137,6 +156,9 @@ test("wall-clock timeout signals the child and settles within cleanup grace", as
     assert.equal(result.code, "run_timeout");
     assert.ok(Date.now() - started < 1_000, "timeout must remain bounded");
     assert.match(await readFile(signalPath, "utf8"), /SIGTERM/);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.killSent, false);
+    assert.equal(result.cleanup.processExited, true);
   });
 });
 
@@ -194,6 +216,8 @@ test("parent cancellation signals an active child and settles once", async () =>
     assert.equal(result.ok, false);
     assert.equal(result.code, "cancelled");
     assert.match(await readFile(signalPath, "utf8"), /SIGTERM/);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.processExited, true);
   });
 });
 
@@ -255,5 +279,195 @@ test("truncates returned terminal text at 50 KiB with metadata", async () => {
     assert.equal(result.truncated, true);
     assert.equal(result.originalBytes, Buffer.byteLength(output));
     assert.ok(Buffer.byteLength(result.text) <= 50 * 1024);
+  });
+});
+
+test("post-exit guard settles when a descendant inherits stdout", async () => {
+  await withTempDir(async (cwd) => {
+    const descendantPidPath = join(cwd, "descendant.pid");
+    const started = Date.now();
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 1_000 },
+      task: "Leaked pipe",
+      cwd,
+      env: fixtureEnv("descendant-holds-stdout", {
+        FAKE_PI_DESCENDANT_PID_PATH: descendantPidPath,
+      }),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 100,
+      exitDrainMs: 30,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "missing_terminal_answer");
+    assert.ok(Date.now() - started < 750, "post-exit drainage must remain bounded");
+    assert.ok(Number(await waitForFile(descendantPidPath)) > 0);
+    assert.equal(result.cleanup.forced, true);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.processExited, true);
+    assert.equal(result.cleanup.pipesClosed, true);
+  });
+});
+
+test("semantic completion preserves a valid answer while forcing leaked-watcher cleanup", async () => {
+  await withTempDir(async (cwd) => {
+    const signalPath = join(cwd, "signals.txt");
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 1_000 },
+      task: "Answer then leak",
+      cwd,
+      env: fixtureEnv("leaked-watcher", { FAKE_PI_SIGNAL_PATH: signalPath }),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 100,
+      semanticDrainMs: 30,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "answer before cleanup");
+    assert.match(await waitForFile(signalPath), /SIGTERM/);
+    assert.equal(result.cleanup.forced, true);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.killSent, false);
+    assert.equal(result.cleanup.processExited, true);
+  });
+});
+
+test("a terminal answer observed before the deadline wins during semantic drainage", async () => {
+  await withTempDir(async (cwd) => {
+    const signalPath = join(cwd, "signals.txt");
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 180 },
+      task: "Late answer then leak",
+      cwd,
+      env: fixtureEnv("delayed-leaked-watcher", {
+        FAKE_PI_DELAY_MS: "140",
+        FAKE_PI_SIGNAL_PATH: signalPath,
+      }),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 100,
+      semanticDrainMs: 80,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "late valid result");
+    assert.ok(result.durationMs >= 180, "cleanup should cross the original deadline in this fixture");
+    assert.match(await waitForFile(signalPath), /SIGTERM/);
+    assert.equal(result.cleanup.forced, true);
+    assert.equal(result.cleanup.pipesClosed, true);
+  });
+});
+
+test("TERM-resistant child is escalated to KILL", async () => {
+  await withTempDir(async (cwd) => {
+    const signalPath = join(cwd, "signals.txt");
+    const started = Date.now();
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 150 },
+      task: "Resist TERM",
+      cwd,
+      env: fixtureEnv("term-resistant", { FAKE_PI_SIGNAL_PATH: signalPath }),
+      cleanupGraceMs: 50,
+      cleanupVerifyMs: 150,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "run_timeout");
+    assert.ok(Date.now() - started < 750, "TERM-to-KILL escalation must remain bounded");
+    assert.equal((await waitForFile(signalPath)).trim(), "SIGTERM");
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.killSent, true);
+    assert.equal(result.cleanup.processExited, true);
+  });
+});
+
+test("TERM-resistant descendant is killed with the full process group", async () => {
+  await withTempDir(async (cwd) => {
+    const signalPath = join(cwd, "signals.txt");
+    const descendantPidPath = join(cwd, "descendant.pid");
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 180 },
+      task: "Resistant descendant",
+      cwd,
+      env: fixtureEnv("term-resistant-descendant", {
+        FAKE_PI_SIGNAL_PATH: signalPath,
+        FAKE_PI_DESCENDANT_PID_PATH: descendantPidPath,
+      }),
+      cleanupGraceMs: 50,
+      cleanupVerifyMs: 150,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "run_timeout");
+    assert.ok(Number(await waitForFile(descendantPidPath)) > 0);
+    assert.match(await waitForFile(signalPath), /SIGTERM/);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.killSent, true);
+    assert.equal(result.cleanup.processExited, true);
+  });
+});
+
+test("abort racing the deadline starts only one cleanup sequence", async () => {
+  await withTempDir(async (cwd) => {
+    const signalPath = join(cwd, "signals.txt");
+    const controller = new AbortController();
+    const run = runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 150 },
+      task: "Race abort and timeout",
+      cwd,
+      signal: controller.signal,
+      env: fixtureEnv("term-resistant", { FAKE_PI_SIGNAL_PATH: signalPath }),
+      cleanupGraceMs: 50,
+      cleanupVerifyMs: 150,
+      exitDrainMs: 20,
+    });
+    setTimeout(() => controller.abort(), 150);
+
+    const result = await run;
+    assert.equal(result.ok, false);
+    assert.ok(result.code === "cancelled" || result.code === "run_timeout");
+    assert.equal((await waitForFile(signalPath)).trim().split("\n").length, 1);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.killSent, true);
+  });
+});
+
+test("normal completion racing the deadline resolves once", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 100 },
+      task: "Race completion and timeout",
+      cwd,
+      env: fixtureEnv("delayed-clean", { FAKE_PI_DELAY_MS: "100" }),
+      cleanupGraceMs: 50,
+      cleanupVerifyMs: 100,
+      semanticDrainMs: 20,
+      exitDrainMs: 20,
+    });
+
+    assert.ok(result.ok || result.code === "run_timeout");
+    if (result.ok) assert.equal(result.text, "delayed result");
+  });
+});
+
+test("retains only the final 64 KiB of stderr diagnostics", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: SCOUT_PROFILE,
+      task: "Large stderr",
+      cwd,
+      env: fixtureEnv("stderr-tail"),
+      cleanupGraceMs: 50,
+      cleanupVerifyMs: 100,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "missing_terminal_answer");
+    assert.equal(Buffer.byteLength(result.stderr), 64 * 1024);
+    assert.match(result.stderr, /END$/);
   });
 });

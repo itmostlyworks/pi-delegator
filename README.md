@@ -6,7 +6,7 @@ A small, reliability-first delegation extension for [Pi](https://github.com/eare
 
 ## Status
 
-Stage 1 is implemented: the package registers a bounded Scout-only `delegate` path with process-based tests. Deterministic process-tree cleanup, the remaining profiles, progress polish, and package release polish are still planned in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
+Stages 1 and 2 are implemented: the package registers a bounded Scout-only `delegate` path with deterministic POSIX process-tree cleanup and process-based lifecycle tests. The remaining profiles, progress polish, and package release polish are still planned in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
 
 Read these before implementing later stages:
 

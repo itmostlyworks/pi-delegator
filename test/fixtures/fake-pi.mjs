@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawn } from "node:child_process";
 import { appendFileSync, statSync, writeFileSync } from "node:fs";
 
 const scenario = process.env.FAKE_PI_SCENARIO ?? "clean";
@@ -7,6 +8,7 @@ const recordPath = process.env.FAKE_PI_RECORD_PATH;
 const signalPath = process.env.FAKE_PI_SIGNAL_PATH;
 const promptModePath = process.env.FAKE_PI_PROMPT_MODE_PATH;
 const cwdPath = process.env.FAKE_PI_CWD_PATH;
+const descendantPidPath = process.env.FAKE_PI_DESCENDANT_PID_PATH;
 const childArgs = process.argv.slice(2);
 
 if (recordPath) writeFileSync(recordPath, JSON.stringify(childArgs));
@@ -30,6 +32,17 @@ function finalMessage(text = "Scout result") {
       stopReason: "stop",
     },
   };
+}
+
+function spawnPipeHoldingDescendant(ignoreTerm) {
+  const script = ignoreTerm
+    ? "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"
+    : "setInterval(()=>{},1000)";
+  const descendant = spawn(process.execPath, ["-e", script], {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  descendant.unref();
+  if (descendantPidPath) writeFileSync(descendantPidPath, String(descendant.pid));
 }
 
 if (scenario === "clean") {
@@ -66,6 +79,47 @@ if (scenario === "clean") {
     if (signalPath) appendFileSync(signalPath, "SIGTERM\n");
     process.exit(143);
   });
+} else if (scenario === "leaked-watcher") {
+  emit(finalMessage("answer before cleanup"));
+  emit({ type: "agent_settled" });
+  const timer = setInterval(() => {}, 1000);
+  process.on("SIGTERM", () => {
+    clearInterval(timer);
+    if (signalPath) appendFileSync(signalPath, "SIGTERM\n");
+    process.exit(143);
+  });
+} else if (scenario === "term-resistant") {
+  setInterval(() => {}, 1000);
+  process.on("SIGTERM", () => {
+    if (signalPath) appendFileSync(signalPath, "SIGTERM\n");
+  });
+} else if (scenario === "descendant-holds-stdout") {
+  spawnPipeHoldingDescendant(false);
+} else if (scenario === "term-resistant-descendant") {
+  spawnPipeHoldingDescendant(true);
+  setInterval(() => {}, 1000);
+  process.on("SIGTERM", () => {
+    if (signalPath) appendFileSync(signalPath, "SIGTERM\n");
+    process.exit(143);
+  });
+} else if (scenario === "delayed-clean") {
+  setTimeout(() => {
+    emit(finalMessage("delayed result"));
+    emit({ type: "agent_settled" });
+  }, Number(process.env.FAKE_PI_DELAY_MS ?? 100));
+} else if (scenario === "delayed-leaked-watcher") {
+  const timer = setInterval(() => {}, 1000);
+  setTimeout(() => {
+    emit(finalMessage("late valid result"));
+    emit({ type: "agent_settled" });
+  }, Number(process.env.FAKE_PI_DELAY_MS ?? 100));
+  process.on("SIGTERM", () => {
+    clearInterval(timer);
+    if (signalPath) appendFileSync(signalPath, "SIGTERM\n");
+    process.exit(143);
+  });
+} else if (scenario === "stderr-tail") {
+  process.stderr.write(`${"x".repeat(70 * 1024)}END`);
 } else {
   process.stderr.write(`Unknown fixture scenario: ${scenario}\n`);
   process.exitCode = 2;
