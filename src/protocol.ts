@@ -3,12 +3,23 @@ const CARRIAGE_RETURN = 0x0d;
 
 export const MAX_PENDING_JSONL_BYTES = 1024 * 1024;
 
+export interface UsageSummary {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly cost: number;
+  readonly contextTokens: number;
+  readonly turns: number;
+}
+
 export interface ProtocolState {
   finalText?: string;
   assistantError?: string;
   stopReason?: string;
   agentSettled: boolean;
   malformedLineCount: number;
+  usage: UsageSummary;
 }
 
 export class ProtocolLineTooLargeError extends Error {
@@ -23,7 +34,8 @@ export class ProtocolLineTooLargeError extends Error {
 
 interface ProtocolParserOptions {
   maxPendingBytes?: number;
-  onAssistantText?: (text: string) => void;
+  onAssistantMessage?: (text: string | undefined) => void;
+  onToolStart?: (toolName: string) => void;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -45,19 +57,52 @@ function isTerminalStop(stopReason: string | undefined): boolean {
   return stopReason === "stop" || stopReason === "length";
 }
 
+function nonnegativeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function aggregateUsage(current: UsageSummary, message: Record<string, unknown>): UsageSummary {
+  const usage = asRecord(message.usage);
+  if (!usage) return { ...current, turns: current.turns + 1 };
+  const cost = asRecord(usage.cost);
+  return {
+    input: current.input + nonnegativeNumber(usage.input),
+    output: current.output + nonnegativeNumber(usage.output),
+    cacheRead: current.cacheRead + nonnegativeNumber(usage.cacheRead),
+    cacheWrite: current.cacheWrite + nonnegativeNumber(usage.cacheWrite),
+    cost: current.cost + nonnegativeNumber(cost?.total),
+    contextTokens:
+      typeof usage.totalTokens === "number" && Number.isFinite(usage.totalTokens) && usage.totalTokens >= 0
+        ? usage.totalTokens
+        : current.contextTokens,
+    turns: current.turns + 1,
+  };
+}
+
 export class ProtocolParser {
   readonly state: ProtocolState = {
     agentSettled: false,
     malformedLineCount: 0,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      contextTokens: 0,
+      turns: 0,
+    },
   };
 
   readonly #maxPendingBytes: number;
-  readonly #onAssistantText: ((text: string) => void) | undefined;
+  readonly #onAssistantMessage: ((text: string | undefined) => void) | undefined;
+  readonly #onToolStart: ((toolName: string) => void) | undefined;
   #pending = Buffer.alloc(0);
 
   constructor(options: ProtocolParserOptions = {}) {
     this.#maxPendingBytes = options.maxPendingBytes ?? MAX_PENDING_JSONL_BYTES;
-    this.#onAssistantText = options.onAssistantText;
+    this.#onAssistantMessage = options.onAssistantMessage;
+    this.#onToolStart = options.onToolStart;
   }
 
   push(chunk: Buffer): void {
@@ -109,21 +154,28 @@ export class ProtocolParser {
       return;
     }
 
+    if (record.type === "tool_execution_start") {
+      if (typeof record.toolName === "string" && record.toolName.length > 0) this.#onToolStart?.(record.toolName);
+      return;
+    }
+
     if (record.type !== "message_end") return;
     const message = asRecord(record.message);
     if (!message || message.role !== "assistant") return;
 
+    this.state.usage = aggregateUsage(this.state.usage, message);
     const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
     const errorMessage = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
     if (stopReason !== undefined) this.state.stopReason = stopReason;
+
+    const text = extractAssistantText(message);
+    this.#onAssistantMessage?.(text);
 
     if (stopReason === "error" || stopReason === "aborted") {
       this.state.assistantError = errorMessage ?? `Assistant stopped with reason: ${stopReason}`;
       return;
     }
 
-    const text = extractAssistantText(message);
-    if (text !== undefined) this.#onAssistantText?.(text);
     if (text !== undefined && isTerminalStop(stopReason)) this.state.finalText = text;
   }
 }

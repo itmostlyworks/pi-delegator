@@ -9,7 +9,7 @@ import {
 
 test("parses split chunks and several events in one chunk", () => {
   const updates = [];
-  const parser = new ProtocolParser({ onAssistantText: (text) => updates.push(text) });
+  const parser = new ProtocolParser({ onAssistantMessage: (text) => updates.push(text) });
   const output = [
     JSON.stringify({ type: "unknown" }),
     JSON.stringify({
@@ -32,6 +32,63 @@ test("parses split chunks and several events in one chunk", () => {
   assert.equal(parser.state.finalText, "done ✓");
   assert.equal(parser.state.agentSettled, true);
   assert.deepEqual(updates, ["done ✓"]);
+});
+
+test("reports tool starts and aggregates assistant usage", () => {
+  const toolStarts = [];
+  const assistantMessages = [];
+  const parser = new ProtocolParser({
+    onToolStart: (toolName) => toolStarts.push(toolName),
+    onAssistantMessage: (text) => assistantMessages.push(text),
+  });
+  parser.push(Buffer.from([
+    JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "checking" }],
+        stopReason: "toolUse",
+        usage: {
+          input: 3,
+          output: 2,
+          cacheRead: 1,
+          cacheWrite: 4,
+          totalTokens: 6,
+          cost: { total: 0.01 },
+        },
+      },
+    }),
+    JSON.stringify({ type: "tool_execution_start", toolCallId: "one", toolName: "read" }),
+    JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        stopReason: "stop",
+        usage: {
+          input: 5,
+          output: 7,
+          cacheRead: 2,
+          cacheWrite: 1,
+          totalTokens: 13,
+          cost: { total: 0.02 },
+        },
+      },
+    }),
+    "",
+  ].join("\n")));
+
+  assert.deepEqual(toolStarts, ["read"]);
+  assert.deepEqual(assistantMessages, ["checking", "done"]);
+  assert.deepEqual(parser.state.usage, {
+    input: 8,
+    output: 9,
+    cacheRead: 3,
+    cacheWrite: 5,
+    cost: 0.03,
+    contextTokens: 13,
+    turns: 2,
+  });
 });
 
 test("retains malformed lines only as a bounded diagnostic count", () => {

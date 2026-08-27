@@ -42,8 +42,8 @@ interface DelegateProfile {
   name: "scout" | "reviewer" | "oracle" | "worker";
   description: string;
   tools: readonly string[];
-  thinking: ThinkingLevel;
-  timeoutMs: number;
+  thinking: ThinkingLevel; // per-call default
+  timeoutMs: number; // per-call maximum
   systemPrompt: string;
 }
 ```
@@ -85,8 +85,8 @@ pi \
   --no-session \
   --no-extensions \
   --no-skills \
-  --model <parent-provider/model> \
-  --thinking <profile-level> \
+  --model <effective-provider/model> \
+  --thinking <effective-level> \
   --tools <profile-tools> \
   --append-system-prompt <private-temp-file> \
   'Task: <task>'
@@ -95,6 +95,8 @@ pi \
 Requirements:
 
 - Resolve the current Pi executable robustly. Permit a private test override such as `PI_DELEGATOR_PI_BINARY`.
+- Use the caller's bounded model selector when supplied; otherwise use the active parent model.
+- Use the caller's validated thinking level when supplied; otherwise use the selected profile default.
 - Use an argument array and `shell: false`.
 - Spawn in the requested cwd.
 - Set `detached: true` on POSIX so the child owns a process group.
@@ -239,7 +241,7 @@ Suggested successful details:
 interface DelegateResultDetails {
   agent: string;
   model?: string;
-  thinking: string;
+  thinking: string; // effective per-call level
   durationMs: number;
   usage?: UsageSummary;
   truncated: boolean;

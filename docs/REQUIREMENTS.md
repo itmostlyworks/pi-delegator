@@ -32,6 +32,8 @@ Register exactly one model-facing tool named `delegate`.
 interface DelegateInput {
   agent: "scout" | "reviewer" | "oracle" | "worker";
   task: string;
+  model?: string;
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   cwd?: string;
   timeoutMs?: number;
 }
@@ -42,16 +44,18 @@ Rules:
 - Exactly one child per call.
 - `task` must be non-empty and bounded in size.
 - `cwd` defaults to the parent context's cwd and must resolve to an existing directory.
+- `model`, when supplied, is a bounded Pi model selector passed to the child; otherwise the child inherits the parent model.
+- `thinking`, when supplied, overrides the selected profile's default using Pi's supported levels; Pi may clamp it to the selected model's capabilities.
 - `timeoutMs`, when supplied, may shorten but not lengthen the selected profile's default deadline.
-- Unknown fields and agent names are rejected by the schema.
-- V1 has no generic model, thinking, prompt, or tool override fields. Profiles own those settings.
+- Unknown fields, agent names, and thinking levels are rejected by the schema.
+- V1 has no generic prompt or tool override fields. Profiles continue to own role authority and tool access.
 
 ## Built-in delegates
 
 ### Scout
 
 - Purpose: fast local codebase reconnaissance
-- Thinking: `low`
+- Default thinking: `low`
 - Tools: `read`, `grep`, `find`, `ls`
 - Default deadline: 180 seconds
 - No `bash`, write tools, skills, or extensions
@@ -59,7 +63,7 @@ Rules:
 ### Reviewer
 
 - Purpose: fresh-context correctness and maintainability review
-- Thinking: `high`
+- Default thinking: `high`
 - Tools: `read`, `grep`, `find`, `ls`, `bash`
 - Default deadline: 600 seconds
 - Prompt instructs it not to modify files
@@ -67,7 +71,7 @@ Rules:
 ### Oracle
 
 - Purpose: challenge assumptions and advise on material decisions
-- Thinking: `high`
+- Default thinking: `high`
 - Tools: `read`, `grep`, `find`, `ls`
 - Default deadline: 600 seconds
 - Prompt instructs it to advise, not implement
@@ -75,12 +79,12 @@ Rules:
 ### Worker
 
 - Purpose: implement one clearly bounded task
-- Thinking: `high`
+- Default thinking: `high`
 - Tools: `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`
 - Default deadline: 1,200 seconds
 - Prompt requires a concise change and validation report
 
-Models are omitted from built-in profiles in V1, so the child inherits the parent model. A future profile configuration mechanism may pin models, but it is not needed to prove the delegation primitive.
+Models are omitted from built-in profile defaults, so the child inherits the parent model unless the caller supplies `model`. Profile thinking levels are defaults and may be overridden per call. Role prompts, tool allowlists, and maximum deadlines remain fixed.
 
 ## Progress behavior
 
@@ -125,6 +129,7 @@ Return bounded stderr and protocol diagnostics. Never report a timeout as an ord
 Initial limits:
 
 - task: 32 KiB UTF-8
+- model selector: 256 bytes UTF-8
 - pending JSONL line: 1 MiB
 - returned final text: 50 KiB
 - stderr tail: 64 KiB
@@ -152,7 +157,7 @@ V1 intentionally excludes:
 ## Acceptance criteria
 
 1. The extension installs as a Pi package and registers `delegate`.
-2. All four profiles launch with their documented prompt, tools, thinking, and deadlines.
+2. All four profiles launch with their documented prompt, tools, default thinking, and deadlines; valid model/thinking overrides affect only the selected call.
 3. Children run with no sessions, extension discovery, or skill discovery.
 4. A clean child result is streamed and returned.
 5. Parent abort terminates the full POSIX process group within a bounded grace period.

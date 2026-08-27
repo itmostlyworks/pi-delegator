@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-import { SCOUT_PROFILE } from "../src/agents.ts";
+import {
+  ORACLE_PROFILE,
+  REVIEWER_PROFILE,
+  SCOUT_PROFILE,
+  WORKER_PROFILE,
+} from "../src/agents.ts";
 import { isSupportedPlatform, runDelegate } from "../src/runner.ts";
 
 const fixture = resolve("test/fixtures/fake-pi.mjs");
@@ -51,7 +56,9 @@ test("returns a clean terminal answer and launches Scout with isolated arguments
       task: "Inspect auth",
       cwd,
       model: "example/model",
-      onAssistantText: (text) => updates.push(text),
+      onProgress: (progress) => {
+        if (progress.type === "assistant_message" && progress.text !== undefined) updates.push(progress.text);
+      },
       env: fixtureEnv("clean", {
         FAKE_PI_RECORD_PATH: recordPath,
         FAKE_PI_PROMPT_MODE_PATH: promptModePath,
@@ -86,6 +93,124 @@ test("returns a clean terminal answer and launches Scout with isolated arguments
     const promptIndex = args.indexOf("--append-system-prompt");
     assert.notEqual(promptIndex, -1);
     await assert.rejects(readFile(args[promptIndex + 1], "utf8"));
+  });
+});
+
+test("launches every fixed profile with isolated CLI contracts and outputs", async () => {
+  await withTempDir(async (cwd) => {
+    const cases = [
+      { profile: SCOUT_PROFILE, output: "scout output" },
+      { profile: REVIEWER_PROFILE, output: "reviewer output" },
+      { profile: ORACLE_PROFILE, output: "oracle output" },
+      { profile: WORKER_PROFILE, output: "worker output" },
+    ];
+
+    const results = await Promise.all(cases.map(async ({ profile, output }) => {
+      const recordPath = join(cwd, `${profile.name}-args.json`);
+      const promptContentPath = join(cwd, `${profile.name}-prompt.md`);
+      const result = await runDelegate({
+        profile,
+        task: `Run ${profile.name}`,
+        cwd,
+        model: "example/model",
+        env: fixtureEnv("clean", {
+          FAKE_PI_OUTPUT: output,
+          FAKE_PI_RECORD_PATH: recordPath,
+          FAKE_PI_PROMPT_CONTENT_PATH: promptContentPath,
+        }),
+        cleanupGraceMs: 50,
+        exitDrainMs: 20,
+      });
+      return { profile, output, result, recordPath, promptContentPath };
+    }));
+
+    for (const { profile, output, result, recordPath, promptContentPath } of results) {
+      assert.equal(result.ok, true);
+      assert.equal(result.text, output);
+      const args = JSON.parse(await readFile(recordPath, "utf8"));
+      assert.equal(args[args.indexOf("--model") + 1], "example/model");
+      assert.equal(args[args.indexOf("--thinking") + 1], profile.thinking);
+      assert.equal(args[args.indexOf("--tools") + 1], profile.tools.join(","));
+      assert.equal(await readFile(promptContentPath, "utf8"), profile.systemPrompt);
+    }
+  });
+});
+
+test("streams compact protocol progress data and aggregates usage", async () => {
+  await withTempDir(async (cwd) => {
+    const progress = [];
+    const result = await runDelegate({
+      profile: REVIEWER_PROFILE,
+      task: "Review",
+      cwd,
+      onProgress: (update) => progress.push(update),
+      env: fixtureEnv("progress-usage"),
+      cleanupGraceMs: 50,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "Review complete");
+    assert.deepEqual(progress.map((update) => update.type), ["assistant_message", "tool_start", "assistant_message"]);
+    assert.equal(progress[1].toolName, "read");
+    assert.deepEqual(result.usage, {
+      input: 8,
+      output: 9,
+      cacheRead: 3,
+      cacheWrite: 5,
+      cost: 0.03,
+      contextTokens: 13,
+      turns: 2,
+    });
+  });
+});
+
+test("progress callback failures do not decide lifecycle", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: SCOUT_PROFILE,
+      task: "Ignore renderer failure",
+      cwd,
+      onProgress: () => {
+        throw new Error("renderer failed");
+      },
+      env: fixtureEnv("progress-usage"),
+      cleanupGraceMs: 50,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "Review complete");
+  });
+});
+
+test("caller timeout can shorten but cannot lengthen the profile deadline", async () => {
+  await withTempDir(async (cwd) => {
+    const shortened = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 1_000 },
+      timeoutMs: 30,
+      task: "Short deadline",
+      cwd,
+      env: fixtureEnv("hang"),
+      cleanupGraceMs: 20,
+      exitDrainMs: 10,
+    });
+    assert.equal(shortened.ok, false);
+    assert.equal(shortened.code, "run_timeout");
+    assert.match(shortened.message, /30 ms/);
+
+    const notLengthened = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 40 },
+      timeoutMs: 1_000,
+      task: "Profile deadline",
+      cwd,
+      env: fixtureEnv("hang"),
+      cleanupGraceMs: 20,
+      exitDrainMs: 10,
+    });
+    assert.equal(notLengthened.ok, false);
+    assert.equal(notLengthened.code, "run_timeout");
+    assert.match(notLengthened.message, /40 ms/);
   });
 });
 

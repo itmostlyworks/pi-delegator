@@ -1,22 +1,24 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { appendFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 
 const scenario = process.env.FAKE_PI_SCENARIO ?? "clean";
 const recordPath = process.env.FAKE_PI_RECORD_PATH;
 const signalPath = process.env.FAKE_PI_SIGNAL_PATH;
 const promptModePath = process.env.FAKE_PI_PROMPT_MODE_PATH;
+const promptContentPath = process.env.FAKE_PI_PROMPT_CONTENT_PATH;
 const cwdPath = process.env.FAKE_PI_CWD_PATH;
 const descendantPidPath = process.env.FAKE_PI_DESCENDANT_PID_PATH;
 const childArgs = process.argv.slice(2);
 
 if (recordPath) writeFileSync(recordPath, JSON.stringify(childArgs));
 if (cwdPath) writeFileSync(cwdPath, process.cwd());
-if (promptModePath) {
+if (promptModePath || promptContentPath) {
   const promptIndex = childArgs.indexOf("--append-system-prompt");
   const promptPath = childArgs[promptIndex + 1];
-  writeFileSync(promptModePath, String(statSync(promptPath).mode & 0o777));
+  if (promptModePath) writeFileSync(promptModePath, String(statSync(promptPath).mode & 0o777));
+  if (promptContentPath) writeFileSync(promptContentPath, readFileSync(promptPath, "utf8"));
 }
 
 function emit(value) {
@@ -57,6 +59,41 @@ if (scenario === "clean") {
 } else if (scenario === "malformed-then-clean") {
   process.stdout.write("not-json\n");
   emit(finalMessage("valid after diagnostic"));
+} else if (scenario === "progress-usage") {
+  emit({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Inspecting\ncode" }],
+      stopReason: "toolUse",
+      usage: {
+        input: 3,
+        output: 2,
+        cacheRead: 1,
+        cacheWrite: 4,
+        totalTokens: 6,
+        cost: { total: 0.01 },
+      },
+    },
+  });
+  emit({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "src" } });
+  emit({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Review complete" }],
+      stopReason: "stop",
+      usage: {
+        input: 5,
+        output: 7,
+        cacheRead: 2,
+        cacheWrite: 1,
+        totalTokens: 13,
+        cost: { total: 0.02 },
+      },
+    },
+  });
+  emit({ type: "agent_settled" });
 } else if (scenario === "no-answer") {
   emit({ type: "agent_settled" });
 } else if (scenario === "assistant-error") {

@@ -4,9 +4,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import type { DelegateProfile } from "./agents.ts";
+import type { DelegateProfile, DelegateThinkingLevel } from "./agents.ts";
 import { createProcessTreeController, type ProcessTreeController } from "./process-tree.ts";
-import { ProtocolLineTooLargeError, ProtocolParser } from "./protocol.ts";
+import {
+  ProtocolLineTooLargeError,
+  ProtocolParser,
+  type UsageSummary,
+} from "./protocol.ts";
 
 export const MAX_FINAL_TEXT_BYTES = 50 * 1024;
 export const MAX_STDERR_BYTES = 64 * 1024;
@@ -54,6 +58,7 @@ export interface DelegateSuccess {
   readonly originalBytes?: number;
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
+  readonly usage: UsageSummary;
   readonly cleanup: CleanupDetails;
 }
 
@@ -70,13 +75,29 @@ export interface DelegateFailure {
 
 export type DelegateOutcome = DelegateSuccess | DelegateFailure;
 
+export type DelegateProgress =
+  | {
+      readonly type: "tool_start";
+      readonly toolName: string;
+      readonly usage: UsageSummary;
+    }
+  | {
+      readonly type: "assistant_message";
+      readonly text?: string;
+      readonly usage: UsageSummary;
+    };
+
 export interface RunDelegateOptions {
   readonly profile: DelegateProfile;
   readonly task: string;
   readonly cwd: string;
   readonly model?: string;
+  /** Thinking override. The selected profile remains the default. */
+  readonly thinking?: DelegateThinkingLevel;
+  /** Caller deadline override. It may shorten, but never lengthen, the profile deadline. */
+  readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
-  readonly onAssistantText?: (text: string) => void;
+  readonly onProgress?: (progress: DelegateProgress) => void;
   /** Private lifecycle tuning for deterministic process fixtures. */
   readonly cleanupGraceMs?: number;
   /** Private lifecycle tuning for deterministic process fixtures. */
@@ -153,9 +174,9 @@ interface TemporaryPrompt {
   readonly filePath: string;
 }
 
-async function createTemporaryPrompt(prompt: string): Promise<TemporaryPrompt> {
+async function createTemporaryPrompt(name: string, prompt: string): Promise<TemporaryPrompt> {
   const directory = await mkdtemp(join(tmpdir(), "pi-delegator-"));
-  const filePath = join(directory, "scout-prompt.md");
+  const filePath = join(directory, `${name}-prompt.md`);
   try {
     await writeFile(filePath, prompt, { encoding: "utf8", mode: 0o600 });
     return { directory, filePath };
@@ -172,11 +193,12 @@ type PromptSetupOutcome =
   | { readonly type: "run_timeout" };
 
 async function createTemporaryPromptWithinDeadline(
+  profileName: string,
   promptText: string,
   deadlineMs: number,
   signal: AbortSignal | undefined,
 ): Promise<PromptSetupOutcome> {
-  const setup = createTemporaryPrompt(promptText);
+  const setup = createTemporaryPrompt(profileName, promptText);
   const setupOutcome = setup.then<PromptSetupOutcome, PromptSetupOutcome>(
     (prompt) => ({ type: "ready", prompt }),
     (error: unknown) => ({ type: "failed", error }),
@@ -208,6 +230,8 @@ async function createTemporaryPromptWithinDeadline(
 export async function runDelegate(options: RunDelegateOptions): Promise<DelegateOutcome> {
   const startedAt = Date.now();
   const env = options.env ?? process.env;
+  const timeoutMs = Math.min(options.profile.timeoutMs, options.timeoutMs ?? options.profile.timeoutMs);
+  const profileLabel = `${options.profile.name.charAt(0).toUpperCase()}${options.profile.name.slice(1)}`;
 
   if (!isSupportedPlatform(process.platform)) {
     return {
@@ -235,8 +259,9 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     };
   }
 
-  const deadlineAt = startedAt + options.profile.timeoutMs;
+  const deadlineAt = startedAt + timeoutMs;
   const promptSetup = await createTemporaryPromptWithinDeadline(
+    options.profile.name,
     options.profile.systemPrompt,
     deadlineAt - Date.now(),
     options.signal,
@@ -261,7 +286,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       message:
         promptSetup.type === "cancelled"
           ? "Parent cancelled before the delegate was launched"
-          : `Scout exceeded its ${options.profile.timeoutMs} ms wall-clock deadline during startup`,
+          : `${profileLabel} exceeded its ${timeoutMs} ms wall-clock deadline during startup`,
       durationMs,
       stderr: "",
       malformedLineCount: 0,
@@ -276,7 +301,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     return {
       ok: false,
       code: "run_timeout",
-      message: `Scout exceeded its ${options.profile.timeoutMs} ms wall-clock deadline during startup`,
+      message: `${profileLabel} exceeded its ${timeoutMs} ms wall-clock deadline during startup`,
       durationMs: Date.now() - startedAt,
       stderr: "",
       malformedLineCount: 0,
@@ -310,7 +335,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
   if (options.model) childArgs.push("--model", options.model);
   childArgs.push(
     "--thinking",
-    options.profile.thinking,
+    options.thinking ?? options.profile.thinking,
     "--tools",
     options.profile.tools.join(","),
     "--append-system-prompt",
@@ -336,10 +361,30 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       resolvePipesClosed = resolveClose;
     });
 
+    const emitProgress = (progress: DelegateProgress): void => {
+      try {
+        options.onProgress?.(progress);
+      } catch {
+        // Progress is observational and must never decide the delegate lifecycle.
+      }
+    };
+
     const parser = new ProtocolParser({
-      onAssistantText: (text) => {
+      onAssistantMessage: (text) => {
         if (!acceptingOutput) return;
-        options.onAssistantText?.(truncateUtf8(text, MAX_FINAL_TEXT_BYTES).text);
+        emitProgress({
+          type: "assistant_message",
+          ...(text === undefined ? {} : { text: truncateUtf8(text, MAX_FINAL_TEXT_BYTES).text }),
+          usage: { ...parser.state.usage },
+        });
+      },
+      onToolStart: (toolName) => {
+        if (!acceptingOutput) return;
+        emitProgress({
+          type: "tool_start",
+          toolName,
+          usage: { ...parser.state.usage },
+        });
       },
     });
 
@@ -406,13 +451,14 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
           ...(final.originalBytes === undefined ? {} : { originalBytes: final.originalBytes }),
           malformedLineCount: parser.state.malformedLineCount,
           exitCode,
+          usage: { ...parser.state.usage },
           cleanup,
         };
       }
       return {
         ok: false,
         code: "missing_terminal_answer",
-        message: `Scout exited${exitCode === null ? "" : ` with code ${exitCode}`} before a terminal assistant answer`,
+        message: `${profileLabel} exited${exitCode === null ? "" : ` with code ${exitCode}`} before a terminal assistant answer`,
         durationMs,
         stderr,
         malformedLineCount: parser.state.malformedLineCount,
@@ -497,7 +543,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
           outcome = {
             ok: false,
             code: "run_timeout",
-            message: `Scout exceeded its ${options.profile.timeoutMs} ms wall-clock deadline`,
+            message: `${profileLabel} exceeded its ${timeoutMs} ms wall-clock deadline`,
             durationMs,
             stderr,
             malformedLineCount: parser.state.malformedLineCount,

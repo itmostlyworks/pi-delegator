@@ -6,7 +6,7 @@ A small, reliability-first delegation extension for [Pi](https://github.com/eare
 
 ## Status
 
-Stages 1 and 2 are implemented: the package registers a bounded Scout-only `delegate` path with deterministic POSIX process-tree cleanup and process-based lifecycle tests. The remaining profiles, progress polish, and package release polish are still planned in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
+Stages 1 through 3 are implemented: the package provides all four fixed profiles, deterministic POSIX process-tree cleanup, compact progress, caller overrides, shortened deadlines, usage aggregation, and process-based lifecycle tests. User-level model/thinking defaults and package release polish are still planned in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
 
 Read these before implementing later stages:
 
@@ -24,6 +24,8 @@ The extension registers one model-facing tool:
 delegate({
   agent: "scout" | "reviewer" | "oracle" | "worker",
   task: "Inspect the authentication flow and identify the relevant files",
+  model: "anthropic/claude-sonnet-4-5", // optional; defaults to parent model
+  thinking: "medium",                  // optional; defaults to profile level
   cwd: "/path/to/project",
   timeoutMs: 120_000
 })
@@ -34,6 +36,7 @@ One call launches one child. Pi already supports parallel sibling tool execution
 ## V1 principles
 
 - Fresh subprocess context only
+- Fixed role prompts and tool allowlists; model and thinking may be overridden per call
 - Foreground tool calls only
 - Every run has a hard wall-clock deadline
 - Parent cancellation terminates the whole child process group
