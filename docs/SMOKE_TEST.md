@@ -143,7 +143,7 @@ Send the prompt below after replacing `<MARKER>` with the value printed by `prin
 Call delegate exactly once with agent worker. Ask it to run this exact validation command and wait for it to finish before answering: node -e 'setInterval(() => {}, 1000)' <MARKER>
 ```
 
-Wait until the worker starts the command, then press Ctrl+C to cancel the active tool call. Exit Pi if needed and check:
+Wait until the worker starts the command, then press Escape (Pi's default `app.interrupt` binding) to cancel the active tool call. Exit Pi if needed and check:
 
 ```bash
 sleep 3
