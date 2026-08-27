@@ -117,6 +117,12 @@ Only the four built-in profile names and the `model` and `thinking` fields are a
 
 Project-local delegate configuration and custom profiles are not discovered.
 
+### TUI output
+
+Delegate results show the selected profile, model selector, thinking level, and duration above the returned text. These are the effective launch settings after call, user-default, and parent-session precedence; Pi may still resolve a fuzzy model selector or clamp thinking to the selected model's capabilities. The collapsed view uses the model ID and bounds the output preview by both lines and text length; expand the tool result to see the full provider/model selector and complete returned text.
+
+This metadata is display-only. The model-visible tool result remains the delegate's bounded response text.
+
 ## Lifecycle and limits
 
 Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables extension and skill discovery, preventing recursive delegation and ambient child behavior. It still receives Pi's normal coding prompt and trusted project instructions.

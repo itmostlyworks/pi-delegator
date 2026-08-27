@@ -11,6 +11,7 @@ All notable changes to `pi-delegator` are documented here.
 - Optional per-call deadlines that may shorten, but never extend, profile limits.
 - Fresh Pi subprocesses with sessions, extension discovery, and skill discovery disabled.
 - Bounded JSONL parsing, progress updates, usage aggregation, stderr capture, and final-output truncation.
+- Compact TUI result metadata showing the selected delegate profile, model, thinking level, and duration.
 - Deterministic POSIX process-group cleanup with cancellation, wall-clock deadlines, TERM-to-KILL escalation, and post-exit/semantic-completion drainage guards.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.

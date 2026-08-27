@@ -42,6 +42,15 @@ const context = (cwd) => ({
   model: { provider: "example", id: "model" },
 });
 
+const plainTheme = {
+  fg: (_color, text) => text,
+  bold: (text) => text,
+};
+
+function renderText(component, width = 200) {
+  return component.render(width).map((line) => line.trimEnd()).join("\n");
+}
+
 test("registers exactly the delegate tool with a closed four-profile schema", () => {
   const tool = registeredTool();
   assert.equal(tool.name, "delegate");
@@ -53,6 +62,70 @@ test("registers exactly the delegate tool with a closed four-profile schema", ()
   assert.match(tool.parameters.properties.model.description, /user's profile default.*parent session model/);
   assert.match(tool.parameters.properties.thinking.description, /user's profile default.*built-in profile level/);
   assert.equal(tool.parameters.properties.timeoutMs.minimum, 1);
+});
+
+test("renders selected delegate model and thinking metadata without changing result content", () => {
+  const tool = registeredTool();
+  const content = [{ type: "text", text: Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") }];
+  const details = {
+    agent: "worker",
+    model: "openai-codex/gpt-5.6-luna",
+    thinking: "high",
+    durationMs: 12_345,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+    truncated: false,
+    malformedLineCount: 0,
+    exitCode: 0,
+    cleanup: { forced: false, termSent: false, killSent: false, processExited: true, pipesClosed: true },
+  };
+
+  const collapsed = renderText(
+    tool.renderResult({ content, details }, { expanded: false, isPartial: false }, plainTheme, {}),
+  );
+  assert.match(collapsed, /^Worker · gpt-5\.6-luna · high · 12\.3s\nline 1/m);
+  assert.match(collapsed, /line 10\n… \(2 more lines; expand to view\)/);
+  assert.doesNotMatch(collapsed, /line 11/);
+
+  const carriageReturnContent = [{ type: "text", text: Array.from({ length: 12 }, (_, index) => `row ${index + 1}`).join("\r") }];
+  const carriageReturnCollapsed = renderText(
+    tool.renderResult(
+      { content: carriageReturnContent, details },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      {},
+    ),
+  );
+  assert.match(carriageReturnCollapsed, /row 10\n… \(2 more lines; expand to view\)/);
+  assert.doesNotMatch(carriageReturnCollapsed, /row 11/);
+
+  const expanded = renderText(
+    tool.renderResult({ content, details }, { expanded: true, isPartial: false }, plainTheme, {}),
+  );
+  assert.match(expanded, /^Worker · openai-codex\/gpt-5\.6-luna · high · 12\.3s\nline 1/m);
+  assert.match(expanded, /line 12/);
+  assert.doesNotMatch(expanded, /more lines/);
+
+  const longContent = [{ type: "text", text: `${"x".repeat(1_200)}END` }];
+  const longCollapsed = renderText(
+    tool.renderResult({ content: longContent, details }, { expanded: false, isPartial: false }, plainTheme, {}),
+    80,
+  );
+  assert.match(longCollapsed, /preview truncated; expand to view/);
+  assert.doesNotMatch(longCollapsed, /END/);
+  const longExpanded = renderText(
+    tool.renderResult({ content: longContent, details }, { expanded: true, isPartial: false }, plainTheme, {}),
+    80,
+  );
+  assert.match(longExpanded, /END/);
+
+  const missingDetailsCollapsed = renderText(
+    tool.renderResult({ content: longContent }, { expanded: false, isPartial: false }, plainTheme, {}),
+    80,
+  );
+  assert.match(missingDetailsCollapsed, /preview truncated; expand to view/);
+  assert.doesNotMatch(missingDetailsCollapsed, /END/);
+
+  assert.deepEqual(content, [{ type: "text", text: Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") }]);
 });
 
 test("fixed profiles expose their documented thinking, deadlines, and tools", () => {

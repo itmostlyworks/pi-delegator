@@ -2,7 +2,8 @@ import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import {
@@ -29,6 +30,8 @@ import {
 export { MAX_MODEL_BYTES } from "./config.ts";
 export const MAX_TASK_BYTES = 32 * 1024;
 const MAX_PROGRESS_CODEPOINTS = 160;
+const MAX_COLLAPSED_RESULT_LINES = 10;
+const MAX_COLLAPSED_RESULT_CODEPOINTS = 1_000;
 
 const DelegateParameters = Type.Object(
   {
@@ -143,8 +146,67 @@ function compactText(text: string): string {
   return `${codepoints.slice(0, MAX_PROGRESS_CODEPOINTS).join("")}…`;
 }
 
-function profileLabel(profile: DelegateProfile): string {
-  return `${profile.name.charAt(0).toUpperCase()}${profile.name.slice(1)}`;
+function profileLabel(profile: DelegateProfile | DelegateProfile["name"]): string {
+  const name = typeof profile === "string" ? profile : profile.name;
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+}
+
+function compactModelSelector(model: string): string {
+  const separator = model.indexOf("/");
+  return separator === -1 ? model : model.slice(separator + 1);
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${Math.round(durationMs / 100) / 10}s`;
+}
+
+function resultText(content: readonly { readonly type: string; readonly text?: string }[]): string {
+  return content
+    .filter((item): item is { readonly type: "text"; readonly text: string } =>
+      item.type === "text" && typeof item.text === "string"
+    )
+    .map((item) => item.text)
+    .join("\n");
+}
+
+function formatRenderedOutput(output: string, expanded: boolean, theme: Theme): string {
+  if (!output) return "";
+  const lines = output.split(/\r\n?|\n/u);
+  if (expanded) return lines.map((line) => theme.fg("toolOutput", line)).join("\n");
+
+  const displayed = lines.slice(0, MAX_COLLAPSED_RESULT_LINES);
+  const previewCodepoints = Array.from(displayed.join("\n"));
+  const previewTruncated = previewCodepoints.length > MAX_COLLAPSED_RESULT_CODEPOINTS;
+  const preview = previewTruncated
+    ? `${previewCodepoints.slice(0, MAX_COLLAPSED_RESULT_CODEPOINTS).join("")}…`
+    : previewCodepoints.join("");
+  let rendered = preview.split("\n").map((line) => theme.fg("toolOutput", line)).join("\n");
+  const remaining = lines.length - displayed.length;
+  if (previewTruncated) {
+    rendered += theme.fg("muted", "\n… (preview truncated; expand to view)");
+  } else if (remaining > 0) {
+    rendered += theme.fg("muted", `\n… (${remaining} more lines; expand to view)`);
+  }
+  return rendered;
+}
+
+function formatRenderedResult(
+  content: readonly { readonly type: string; readonly text?: string }[],
+  details: DelegateDetails,
+  expanded: boolean,
+  theme: Theme,
+): string {
+  const model = details.model === undefined
+    ? "default model"
+    : expanded
+      ? details.model
+      : compactModelSelector(details.model);
+  const header =
+    theme.fg("toolTitle", theme.bold(profileLabel(details.agent))) +
+    theme.fg("muted", ` · ${model} · ${details.thinking} · ${formatDuration(details.durationMs)}`);
+  const output = formatRenderedOutput(resultText(content), expanded, theme);
+  return output ? `${header}\n${output}` : header;
 }
 
 function formatProgress(profile: DelegateProfile, progress: DelegateProgress): string {
@@ -245,6 +307,14 @@ export default function piDelegator(pi: ExtensionAPI): void {
         content: [{ type: "text", text: result.text }],
         details: successDetails(result, profile, model, thinking),
       };
+    },
+
+    renderResult(result, { expanded }, theme, _context) {
+      const details = result.details as DelegateDetails | undefined;
+      const text = details === undefined
+        ? formatRenderedOutput(resultText(result.content), expanded, theme)
+        : formatRenderedResult(result.content, details, expanded, theme);
+      return new Text(text, 0, 0);
     },
   });
 }
