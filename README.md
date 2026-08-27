@@ -6,7 +6,7 @@ A small, reliability-first delegation extension for [Pi](https://github.com/eare
 
 ## Status
 
-Stages 1 through 3 are implemented: the package provides all four fixed profiles, deterministic POSIX process-tree cleanup, compact progress, caller overrides, shortened deadlines, usage aggregation, and process-based lifecycle tests. User-level model/thinking defaults and package release polish are still planned in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
+Stages 1 through 4 are implemented: the package provides all four fixed profiles, deterministic POSIX process-tree cleanup, compact progress, caller and user-level model/thinking overrides, shortened deadlines, usage aggregation, and process-based lifecycle tests. Package release polish is still planned in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
 
 Read these before implementing later stages:
 
@@ -24,14 +24,27 @@ The extension registers one model-facing tool:
 delegate({
   agent: "scout" | "reviewer" | "oracle" | "worker",
   task: "Inspect the authentication flow and identify the relevant files",
-  model: "anthropic/claude-sonnet-4-5", // optional; defaults to parent model
-  thinking: "medium",                  // optional; defaults to profile level
+  model: "anthropic/claude-sonnet-4-5", // optional; then user default, then parent model
+  thinking: "medium",                  // optional; then user default, then profile level
   cwd: "/path/to/project",
   timeoutMs: 120_000
 })
 ```
 
 One call launches one child. Pi already supports parallel sibling tool execution, so the parent can launch multiple independent delegates without a second workflow language.
+
+## User defaults
+
+Optional per-profile model and thinking defaults can be stored in `~/.pi/agent/pi-delegator.json` (or the directory selected by `PI_CODING_AGENT_DIR`):
+
+```json
+{
+  "scout": { "model": "anthropic/claude-sonnet-4-5", "thinking": "medium" },
+  "reviewer": { "thinking": "high" }
+}
+```
+
+Only the four built-in profile names and the `model` and `thinking` fields are accepted. The file is loaded once when the extension starts. Per-call values take precedence; project-local configuration is not discovered.
 
 ## V1 principles
 

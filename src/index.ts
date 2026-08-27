@@ -12,6 +12,11 @@ import {
   type DelegateProfile,
   type DelegateThinkingLevel,
 } from "./agents.ts";
+import {
+  loadDelegateDefaults,
+  MAX_MODEL_BYTES,
+  normalizeModelSelector,
+} from "./config.ts";
 import type { UsageSummary } from "./protocol.ts";
 import {
   runDelegate,
@@ -21,8 +26,8 @@ import {
   type DelegateSuccess,
 } from "./runner.ts";
 
+export { MAX_MODEL_BYTES } from "./config.ts";
 export const MAX_TASK_BYTES = 32 * 1024;
-export const MAX_MODEL_BYTES = 256;
 const MAX_PROGRESS_CODEPOINTS = 160;
 
 const DelegateParameters = Type.Object(
@@ -37,14 +42,14 @@ const DelegateParameters = Type.Object(
     }),
     model: Type.Optional(
       Type.String({
-        description: "Pi model selector; defaults to the parent session model",
+        description: "Pi model selector; defaults to the user's profile default, then the parent session model",
         minLength: 1,
         maxLength: MAX_MODEL_BYTES,
       }),
     ),
     thinking: Type.Optional(
       StringEnum(DELEGATE_THINKING_LEVELS, {
-        description: "Pi thinking level; defaults to the selected profile's level",
+        description: "Pi thinking level; defaults to the user's profile default, then the built-in profile level",
       }),
     ),
     cwd: Type.Optional(
@@ -165,6 +170,8 @@ async function resolveWorkingDirectory(requested: string | undefined, parentCwd:
 }
 
 export default function piDelegator(pi: ExtensionAPI): void {
+  const configuredDefaults = loadDelegateDefaults();
+
   pi.registerTool<typeof DelegateParameters, DelegateDetails>({
     name: "delegate",
     label: "Delegate",
@@ -187,13 +194,10 @@ export default function piDelegator(pi: ExtensionAPI): void {
       ) {
         throw new Error("Delegate timeoutMs must be a positive integer");
       }
-      const requestedModel = params.model?.trim();
-      if (params.model !== undefined && requestedModel?.length === 0) {
-        throw new Error("Delegate model must not be blank");
-      }
-      if (params.model !== undefined && Buffer.byteLength(params.model, "utf8") > MAX_MODEL_BYTES) {
-        throw new Error(`Delegate model exceeds the ${MAX_MODEL_BYTES}-byte UTF-8 limit`);
-      }
+      const requestedModel =
+        params.model === undefined
+          ? undefined
+          : normalizeModelSelector(params.model, "Delegate model");
       if (
         params.thinking !== undefined &&
         !DELEGATE_THINKING_LEVELS.includes(params.thinking)
@@ -202,9 +206,13 @@ export default function piDelegator(pi: ExtensionAPI): void {
       }
 
       const profile = getDelegateProfile(params.agent);
+      const profileDefaults = configuredDefaults[profile.name];
       const cwd = await resolveWorkingDirectory(params.cwd, ctx.cwd);
-      const model = requestedModel ?? (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
-      const thinking = params.thinking ?? profile.thinking;
+      const model =
+        requestedModel ??
+        profileDefaults?.model ??
+        (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
+      const thinking = params.thinking ?? profileDefaults?.thinking ?? profile.thinking;
       const startedAt = Date.now();
       const result = await runDelegate({
         profile,
