@@ -2,6 +2,16 @@
   "name": "pi-delegator",
   "version": "0.1.0",
   "description": "A small, reliability-first delegation extension for Pi",
+  "license": "MIT",
+  "author": "Ludwig Bäcklund",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ludwigbacklund/pi-delegator.git"
+  },
+  "homepage": "https://github.com/ludwigbacklund/pi-delegator#readme",
+  "bugs": {
+    "url": "https://github.com/ludwigbacklund/pi-delegator/issues"
+  },
   "type": "module",
   "keywords": [
     "pi-package"
@@ -12,7 +22,10 @@
   "files": [
     "agents",
     "src",
-    "README.md"
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "docs"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

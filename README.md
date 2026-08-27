@@ -2,21 +2,64 @@
 
 A small, reliability-first delegation extension for [Pi](https://github.com/earendil-works/pi-mono).
 
-`pi-delegator` gives the parent agent one narrow capability: run a bounded task in a fresh Pi subprocess and return its result. It is deliberately not a workflow engine, scheduler, mission manager, or persistent agent fleet.
+`pi-delegator` gives the parent agent one narrow capability: run one bounded task in a fresh Pi subprocess and return its result. It is deliberately not a workflow engine, scheduler, mission manager, or persistent agent fleet.
 
 ## Status
 
-Stages 1 through 4 are implemented: the package provides all four fixed profiles, deterministic POSIX process-tree cleanup, compact progress, caller and user-level model/thinking overrides, shortened deadlines, usage aggregation, and process-based lifecycle tests. Package release polish is still planned in [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
+The v0.1.0 implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls. Live-provider checks remain a manual release step; see [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md).
 
-Read these before implementing later stages:
+## Requirements
 
-1. [`AGENTS.md`](AGENTS.md) — repository rules for coding agents
-2. [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — product scope and acceptance criteria
-3. [`docs/DESIGN.md`](docs/DESIGN.md) — architecture and lifecycle contract
-4. [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) — staged implementation and test plan
-5. [`HANDOVER.md`](HANDOVER.md) — copy-paste prompt for the first implementation agent
+- Pi with an authenticated model provider
+- Node.js 22.19.0 or newer
+- macOS or Linux
 
-## Intended interface
+Windows is rejected before launch because equivalent process-tree termination is not implemented.
+
+## Installation
+
+Pi packages execute with full system access. Review this package before installing it.
+
+Install the current Git repository:
+
+```bash
+pi install git:github.com/ludwigbacklund/pi-delegator
+```
+
+Install a pinned release after the `v0.1.0` tag is available:
+
+```bash
+pi install git:github.com/ludwigbacklund/pi-delegator@v0.1.0
+```
+
+After publication to npm, the equivalent command is:
+
+```bash
+pi install npm:pi-delegator@0.1.0
+```
+
+For local development:
+
+```bash
+git clone https://github.com/ludwigbacklund/pi-delegator.git
+cd pi-delegator
+npm install
+pi install "$PWD"
+```
+
+Start a new Pi session after installation. Remove the package with the matching source, for example:
+
+```bash
+pi remove git:github.com/ludwigbacklund/pi-delegator
+```
+
+## Usage
+
+Ask Pi to delegate a focused task:
+
+```text
+Use the scout delegate to identify the files that implement authentication.
+```
 
 The extension registers one model-facing tool:
 
@@ -24,62 +67,92 @@ The extension registers one model-facing tool:
 delegate({
   agent: "scout" | "reviewer" | "oracle" | "worker",
   task: "Inspect the authentication flow and identify the relevant files",
-  model: "anthropic/claude-sonnet-4-5", // optional; then user default, then parent model
-  thinking: "medium",                  // optional; then user default, then profile level
-  cwd: "/path/to/project",
-  timeoutMs: 120_000
+  model: "anthropic/claude-sonnet-4-5", // optional
+  thinking: "medium",                  // optional
+  cwd: "/path/to/project",             // optional
+  timeoutMs: 120_000                    // optional; may only shorten the profile limit
 })
 ```
 
-One call launches one child. Pi already supports parallel sibling tool execution, so the parent can launch multiple independent delegates without a second workflow language.
+The parent agent may issue independent `delegate` calls in the same turn to run them concurrently. There is intentionally no package-specific parallel or workflow API.
+
+### Profiles
+
+| Profile | Purpose | Tools | Default thinking | Maximum deadline |
+| --- | --- | --- | --- | ---: |
+| `scout` | Fast codebase reconnaissance | `read`, `grep`, `find`, `ls` | `low` | 3 minutes |
+| `reviewer` | Correctness and maintainability review | `read`, `grep`, `find`, `ls`, `bash` | `high` | 10 minutes |
+| `oracle` | Challenge assumptions and advise | `read`, `grep`, `find`, `ls` | `high` | 10 minutes |
+| `worker` | Implement one bounded change | `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write` | `high` | 20 minutes |
+
+Only `worker` receives the dedicated `edit` and `write` tools. Reviewer receives `bash`, but its fixed role prompt restricts shell use to read-only inspection and validation; reviewer and oracle prompts explicitly forbid modifications.
+
+### Inputs and precedence
+
+- `task` is required, must not be blank, and is limited to 32 KiB of UTF-8.
+- `cwd` defaults to the parent session directory and must be an existing directory.
+- `model` uses a Pi `provider/model` selector and is limited to 256 UTF-8 bytes.
+- `thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
+- `timeoutMs` must be positive and can only shorten the selected profile's deadline.
+- Model precedence is call override → user profile default → parent session model.
+- Thinking precedence is call override → user profile default → built-in profile default.
 
 ## User defaults
 
-Optional per-profile model and thinking defaults can be stored in `~/.pi/agent/pi-delegator.json` (or the directory selected by `PI_CODING_AGENT_DIR`):
+Optional per-profile defaults live at `~/.pi/agent/pi-delegator.json`, or under the directory selected by `PI_CODING_AGENT_DIR`:
 
 ```json
 {
-  "scout": { "model": "anthropic/claude-sonnet-4-5", "thinking": "medium" },
-  "reviewer": { "thinking": "high" }
+  "scout": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "thinking": "medium"
+  },
+  "reviewer": {
+    "thinking": "high"
+  }
 }
 ```
 
-Only the four built-in profile names and the `model` and `thinking` fields are accepted. The file is loaded once when the extension starts. Per-call values take precedence; project-local configuration is not discovered.
+Only the four built-in profile names and the `model` and `thinking` fields are accepted. Invalid configuration prevents the extension from starting with an actionable error. Configuration is loaded once at extension startup; start a new Pi session after editing it.
 
-## V1 principles
+Project-local delegate configuration and custom profiles are not discovered.
 
-- Fresh subprocess context only
-- Fixed role prompts and tool allowlists; model and thinking may be overridden per call
-- Foreground tool calls only
-- Every run has a hard wall-clock deadline
-- Parent cancellation terminates the whole child process group
-- A valid terminal answer is not discarded merely because the child process fails to drain
-- Compact output and bounded diagnostics
-- No recursive extension loading
-- No durable background state
-- macOS and Linux first; fail clearly on unsupported process-control platforms
+## Lifecycle and limits
 
-## Planned package shape
+Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables extension and skill discovery, preventing recursive delegation and ambient child behavior. It still receives Pi's normal coding prompt and trusted project instructions.
 
-```text
-pi-delegator/
-├── agents/
-│   ├── oracle.md
-│   ├── reviewer.md
-│   ├── scout.md
-│   └── worker.md
-├── docs/
-├── src/
-│   ├── agents.ts
-│   ├── index.ts
-│   ├── process-tree.ts
-│   ├── protocol.ts
-│   └── runner.ts
-├── test/
-├── AGENTS.md
-├── HANDOVER.md
-├── package.json
-└── README.md
+The runner enforces a hard wall-clock deadline and propagates parent cancellation to the entire process group using bounded TERM → KILL cleanup. It does not wait exclusively for stdio to close, so descendants holding pipes open cannot leave the tool pending indefinitely. A validated terminal answer remains successful if forced post-answer cleanup is required, and cleanup details are returned with the tool result.
+
+Model-visible output is bounded:
+
+- final response: 50 KiB, with explicit truncation metadata
+- stderr tail: 64 KiB
+- pending JSONL line: 1 MiB
+- progress: compact tool-start and assistant-message summaries
+
+## Deliberate limitations
+
+v0.1.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
+
+## Development
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm pack --dry-run
 ```
 
-This layout is guidance, not a requirement. Prefer fewer modules when boundaries do not earn their keep.
+The automated tests use a fake Pi executable and make no provider calls. Run the [manual smoke test](docs/SMOKE_TEST.md) separately before a release.
+
+## Documentation
+
+- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) — scope and acceptance criteria
+- [`docs/DESIGN.md`](docs/DESIGN.md) — architecture and lifecycle contract
+- [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) — staged implementation and lifecycle matrix
+- [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md) — manual real-Pi release checks
+- [`CHANGELOG.md`](CHANGELOG.md) — release history
+
+## License
+
+[MIT](LICENSE)
