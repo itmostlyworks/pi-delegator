@@ -181,7 +181,7 @@ No callback may resolve/reject the outer promise independently.
 
 ### Wall-clock deadline
 
-Arm the run deadline before or immediately after spawn. It includes startup, model calls, tools, and process drainage.
+Use the selected profile's fixed deadline; the model-facing tool exposes no deadline override. Arm the run deadline before or immediately after spawn. It includes startup, model calls, tools, and process drainage. Tests may inject shorter private runner deadlines to keep lifecycle fixtures deterministic and fast.
 
 On deadline:
 

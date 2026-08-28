@@ -6,7 +6,7 @@ A small, reliability-first delegation extension for [Pi](https://github.com/eare
 
 ## Status
 
-The v0.2.0 implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls. Live-provider checks remain a manual release step; see [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md).
+The current implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls. Live-provider checks remain a manual release step; see [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md).
 
 ## Requirements
 
@@ -26,16 +26,16 @@ Install the current Git repository:
 pi install git:github.com/ludwigbacklund/pi-delegator
 ```
 
-Install the pinned `v0.2.0` release:
+Install the pinned `v0.3.0` release:
 
 ```bash
-pi install git:github.com/ludwigbacklund/pi-delegator@v0.2.0
+pi install git:github.com/ludwigbacklund/pi-delegator@v0.3.0
 ```
 
 After publication to npm, the equivalent command is:
 
 ```bash
-pi install npm:pi-delegator@0.2.0
+pi install npm:pi-delegator@0.3.0
 ```
 
 For local development:
@@ -68,8 +68,7 @@ delegate({
   agent: "scout" | "reviewer" | "oracle" | "worker",
   task: "Inspect the authentication flow and identify the relevant files",
   model: "anthropic/claude-sonnet-4-5", // optional
-  cwd: "/path/to/project",             // optional
-  timeoutMs: 120_000                    // optional; may only shorten the profile limit
+  cwd: "/path/to/project"              // optional
 })
 ```
 
@@ -77,7 +76,7 @@ The parent agent may issue independent `delegate` calls in the same turn to run 
 
 ### Profiles
 
-| Profile | Purpose | Tools | Default thinking | Maximum deadline |
+| Profile | Purpose | Tools | Default thinking | Deadline |
 | --- | --- | --- | --- | ---: |
 | `scout` | Fast codebase reconnaissance | `read`, `grep`, `find`, `ls` | `low` | 3 minutes |
 | `reviewer` | Correctness and maintainability review | `read`, `grep`, `find`, `ls`, `bash` | `high` | 10 minutes |
@@ -91,7 +90,7 @@ Only `worker` receives the dedicated `edit` and `write` tools. Reviewer receives
 - `task` is required, must not be blank, and is limited to 32 KiB of UTF-8.
 - `cwd` defaults to the parent session directory and must be an existing directory.
 - `model` uses a Pi `provider/model` selector and is limited to 256 UTF-8 bytes.
-- `timeoutMs` must be positive and can only shorten the selected profile's deadline.
+- Deadlines are fixed by profile and cannot be shortened or extended by the calling agent.
 - Model precedence is call override → user profile default → parent session model.
 - Thinking is not a tool input; its precedence is user profile default → built-in profile default.
 
@@ -136,7 +135,7 @@ Model-visible output is bounded:
 
 ## Deliberate limitations
 
-v0.2.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
+v0.3.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
 
 ## Development
 

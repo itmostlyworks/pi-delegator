@@ -55,12 +55,6 @@ const DelegateParameters = Type.Object(
         minLength: 1,
       }),
     ),
-    timeoutMs: Type.Optional(
-      Type.Integer({
-        description: "Optional deadline in milliseconds; can only shorten the selected profile deadline",
-        minimum: 1,
-      }),
-    ),
   },
   { additionalProperties: false },
 );
@@ -244,12 +238,6 @@ export default function piDelegator(pi: ExtensionAPI): void {
       if (taskBytes > MAX_TASK_BYTES) {
         throw new Error(`Delegate task exceeds the ${MAX_TASK_BYTES}-byte UTF-8 limit`);
       }
-      if (
-        params.timeoutMs !== undefined &&
-        (!Number.isSafeInteger(params.timeoutMs) || params.timeoutMs <= 0)
-      ) {
-        throw new Error("Delegate timeoutMs must be a positive integer");
-      }
       const requestedModel =
         params.model === undefined
           ? undefined
@@ -269,7 +257,6 @@ export default function piDelegator(pi: ExtensionAPI): void {
         cwd,
         ...(model === undefined ? {} : { model }),
         thinking,
-        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
         ...(signal === undefined ? {} : { signal }),
         ...(onUpdate === undefined
           ? {}

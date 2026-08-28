@@ -55,12 +55,12 @@ test("registers exactly the delegate tool with a closed four-profile schema", ()
   const tool = registeredTool();
   assert.equal(tool.name, "delegate");
   assert.equal(tool.parameters.additionalProperties, false);
-  assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "task", "model", "cwd", "timeoutMs"]);
+  assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "task", "model", "cwd"]);
   assert.deepEqual(tool.parameters.properties.agent.enum, ["scout", "reviewer", "oracle", "worker"]);
   assert.equal(Object.hasOwn(tool.parameters.properties, "thinking"), false);
+  assert.equal(Object.hasOwn(tool.parameters.properties, "timeoutMs"), false);
   assert.equal(tool.parameters.properties.model.maxLength, MAX_MODEL_BYTES);
   assert.match(tool.parameters.properties.model.description, /user's profile default.*parent session model/);
-  assert.equal(tool.parameters.properties.timeoutMs.minimum, 1);
 });
 
 test("renders selected delegate model and thinking metadata without changing result content", () => {
@@ -155,16 +155,12 @@ test("fixed profiles expose their documented thinking, deadlines, and tools", ()
   assert.match(WORKER_PROFILE.systemPrompt, /Implement one clearly bounded coding task/);
 });
 
-test("rejects blank and oversized UTF-8 tasks and invalid deadlines before launch", async () => {
+test("rejects blank and oversized UTF-8 tasks before launch", async () => {
   const tool = registeredTool();
   await assert.rejects(tool.execute("id", { agent: "scout", task: "   " }, undefined, undefined, context(process.cwd())), /must not be blank/);
   await assert.rejects(
     tool.execute("id", { agent: "scout", task: "é".repeat(MAX_TASK_BYTES) }, undefined, undefined, context(process.cwd())),
     /UTF-8 limit/,
-  );
-  await assert.rejects(
-    tool.execute("id", { agent: "scout", task: "Inspect", timeoutMs: 0 }, undefined, undefined, context(process.cwd())),
-    /positive integer/,
   );
   await assert.rejects(
     tool.execute("id", { agent: "toString", task: "Inspect" }, undefined, undefined, context(process.cwd())),

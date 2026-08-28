@@ -52,8 +52,7 @@ Deliver:
 - reviewer, oracle, and worker profiles
 - fixed role prompts/tool allowlists/default thinking/deadlines
 - compact `onUpdate` progress
-- optional caller model override; thinking remains profile-controlled
-- optional caller timeout that can only shorten the profile deadline
+- optional caller model override; thinking and deadlines remain profile-controlled
 - usage aggregation from assistant events
 
 Acceptance:
@@ -163,10 +162,9 @@ If implemented in V1:
 ### Profiles and concurrency
 
 - each profile emits expected inherited model/default thinking/tools arguments
-- call model overrides replace model defaults for only that call; thinking is absent from the tool schema
+- call model overrides replace model defaults for only that call; thinking and deadline overrides are absent from the tool schema
 - invalid or oversized model overrides are rejected
-- call timeout shortens profile deadline
-- call timeout cannot lengthen profile deadline
+- the tool schema exposes no caller deadline override
 - two concurrent delegate calls return their own output
 - one concurrent timeout does not stop its sibling
 

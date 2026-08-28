@@ -1,6 +1,6 @@
 {
   "name": "pi-delegator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A small, reliability-first delegation extension for Pi",
   "license": "MIT",
   "author": "Ludwig Bäcklund",

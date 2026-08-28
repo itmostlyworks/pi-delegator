@@ -34,7 +34,6 @@ interface DelegateInput {
   task: string;
   model?: string;
   cwd?: string;
-  timeoutMs?: number;
 }
 ```
 
@@ -45,7 +44,7 @@ Rules:
 - `cwd` defaults to the parent context's cwd and must resolve to an existing directory.
 - `model`, when supplied, is a bounded Pi model selector passed to the child; otherwise the selected profile's user-configured model is used when present, then the parent model.
 - Thinking is not exposed to the calling agent. The selected profile uses the user's configured thinking level when present, otherwise its built-in default; Pi may clamp it to the selected model's capabilities.
-- `timeoutMs`, when supplied, may shorten but not lengthen the selected profile's default deadline.
+- The selected profile's deadline is fixed and is not exposed to the calling agent.
 - Unknown fields and agent names are rejected by the schema.
 - V1 has no generic prompt or tool override fields. Profiles continue to own role authority and tool access.
 
@@ -83,7 +82,7 @@ Rules:
 - Default deadline: 1,200 seconds
 - Prompt requires a concise change and validation report
 
-Models are omitted from built-in profile defaults, so the child uses the caller's model, then a user-configured profile model, then the parent model. Profile thinking levels may be overridden only through user-level configuration, not by the calling agent. Role prompts, tool allowlists, and maximum deadlines remain fixed.
+Models are omitted from built-in profile defaults, so the child uses the caller's model, then a user-configured profile model, then the parent model. Profile thinking levels may be overridden only through user-level configuration, not by the calling agent. Role prompts, tool allowlists, and deadlines remain fixed; callers cannot guess a shorter deadline that discards useful delegate work.
 
 ## Progress behavior
 
@@ -156,7 +155,7 @@ V1 intentionally excludes:
 ## Acceptance criteria
 
 1. The extension installs as a Pi package and registers `delegate`.
-2. All four profiles launch with their documented prompt, tools, effective configured or built-in thinking, and deadlines; valid model overrides affect only the selected call, and the tool schema exposes no thinking override.
+2. All four profiles launch with their documented prompt, tools, effective configured or built-in thinking, and deadlines; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
 3. Children run with no sessions, extension discovery, or skill discovery.
 4. A clean child result is streamed and returned.
 5. Parent abort terminates the full POSIX process group within a bounded grace period.

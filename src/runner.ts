@@ -94,7 +94,7 @@ export interface RunDelegateOptions {
   readonly model?: string;
   /** Effective thinking level resolved from user configuration or the built-in profile. */
   readonly thinking?: DelegateThinkingLevel;
-  /** Caller deadline override. It may shorten, but never lengthen, the profile deadline. */
+  /** Private deadline override for deterministic lifecycle tests. Not exposed by the delegate tool. */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: DelegateProgress) => void;

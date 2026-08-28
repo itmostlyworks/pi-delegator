@@ -184,7 +184,7 @@ test("progress callback failures do not decide lifecycle", async () => {
   });
 });
 
-test("caller timeout can shorten but cannot lengthen the profile deadline", async () => {
+test("private test timeout can shorten but cannot lengthen the profile deadline", async () => {
   await withTempDir(async (cwd) => {
     const shortened = await runDelegate({
       profile: { ...SCOUT_PROFILE, timeoutMs: 1_000 },
