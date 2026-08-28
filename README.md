@@ -26,16 +26,16 @@ Install the current Git repository:
 pi install git:github.com/ludwigbacklund/pi-delegator
 ```
 
-Install the pinned `v0.3.0` release:
+Install the pinned `v0.3.1` release:
 
 ```bash
-pi install git:github.com/ludwigbacklund/pi-delegator@v0.3.0
+pi install git:github.com/ludwigbacklund/pi-delegator@v0.3.1
 ```
 
 After publication to npm, the equivalent command is:
 
 ```bash
-pi install npm:pi-delegator@0.3.0
+pi install npm:pi-delegator@0.3.1
 ```
 
 For local development:
@@ -131,11 +131,11 @@ Model-visible output is bounded:
 - final response: 50 KiB, with explicit truncation metadata
 - stderr tail: 64 KiB
 - pending JSONL line: 1 MiB
-- progress: compact tool-start and assistant-message summaries
+- progress: compact accumulating tool-call count and recent tool-start order
 
 ## Deliberate limitations
 
-v0.3.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
+v0.3.1 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
 
 ## Development
 

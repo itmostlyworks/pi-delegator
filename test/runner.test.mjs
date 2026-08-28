@@ -151,8 +151,22 @@ test("streams compact protocol progress data and aggregates usage", async () => 
 
     assert.equal(result.ok, true);
     assert.equal(result.text, "Review complete");
-    assert.deepEqual(progress.map((update) => update.type), ["assistant_message", "tool_start", "assistant_message"]);
-    assert.equal(progress[1].toolName, "read");
+    assert.deepEqual(progress.map((update) => update.type), [
+      "assistant_message",
+      "tool_start",
+      "tool_start",
+      "tool_start",
+      "tool_start",
+      "tool_start",
+      "tool_start",
+      "tool_start",
+      "tool_start",
+      "assistant_message",
+    ]);
+    assert.deepEqual(
+      progress.filter((update) => update.type === "tool_start").map((update) => update.toolName),
+      ["read", "grep", "read", "read", "bash", "find", "ls", "工具工具工具工具工具工具工具"],
+    );
     assert.deepEqual(result.usage, {
       input: 8,
       output: 9,

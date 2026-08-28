@@ -77,6 +77,13 @@ if (scenario === "clean") {
     },
   });
   emit({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: { path: "src" } });
+  emit({ type: "tool_execution_start", toolCallId: "tool-2", toolName: "grep", args: { pattern: "TODO" } });
+  emit({ type: "tool_execution_start", toolCallId: "tool-3", toolName: "read", args: { path: "test" } });
+  emit({ type: "tool_execution_start", toolCallId: "tool-4", toolName: "read", args: { path: "docs" } });
+  emit({ type: "tool_execution_start", toolCallId: "tool-5", toolName: "bash", args: { command: "true" } });
+  emit({ type: "tool_execution_start", toolCallId: "tool-6", toolName: "find", args: { pattern: "*.ts" } });
+  emit({ type: "tool_execution_start", toolCallId: "tool-7", toolName: "ls", args: { path: "." } });
+  emit({ type: "tool_execution_start", toolCallId: "tool-8", toolName: "工具工具工具工具工具工具工具", args: {} });
   emit({
     type: "message_end",
     message: {

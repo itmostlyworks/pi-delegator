@@ -228,9 +228,16 @@ test("applies a model override while preserving profile thinking and streams com
     assert.equal(result.details.model, "override/model");
     assert.equal(result.details.thinking, "high");
     assert.deepEqual(updates.map((update) => update.content[0].text), [
-      "Reviewer: Inspecting code",
-      "Reviewer started read",
-      "Reviewer: Review complete",
+      "Working · no tool calls yet",
+      "1 tool call: read",
+      "2 tool calls: read → grep",
+      "3 tool calls: read → grep → read",
+      "4 tool calls: read → grep → read ×2",
+      "5 tool calls: read → grep → read ×2 → bash",
+      "6 tool calls: read → grep → read ×2 → bash → find",
+      "7 tool calls: … 1 earlier → grep → read ×2 → bash → find → ls",
+      "8 tool calls: … 2 earlier → read ×2 → bash → find → ls → 工具工具工具工具工具工具…",
+      "8 tool calls: … 2 earlier → read ×2 → bash → find → ls → 工具工具工具工具工具工具…",
     ]);
     assert.equal(updates.at(-1).details.usage.turns, 2);
     assert.equal(result.details.usage.input, 8);

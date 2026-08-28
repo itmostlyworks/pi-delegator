@@ -28,7 +28,8 @@ import {
 
 export { MAX_MODEL_BYTES } from "./config.ts";
 export const MAX_TASK_BYTES = 32 * 1024;
-const MAX_PROGRESS_CODEPOINTS = 160;
+const MAX_PROGRESS_TOOL_NAME_CODEPOINTS = 12;
+const MAX_RECENT_PROGRESS_TOOLS = 6;
 const MAX_COLLAPSED_RESULT_LINES = 10;
 const MAX_COLLAPSED_RESULT_CODEPOINTS = 1_000;
 
@@ -127,11 +128,15 @@ function progressDetails(
   };
 }
 
-function compactText(text: string): string {
-  const oneLine = text.replace(/\s+/gu, " ").trim();
-  const codepoints = Array.from(oneLine);
-  if (codepoints.length <= MAX_PROGRESS_CODEPOINTS) return oneLine;
-  return `${codepoints.slice(0, MAX_PROGRESS_CODEPOINTS).join("")}…`;
+interface ToolProgressSummary {
+  totalCalls: number;
+  readonly recentTools: string[];
+}
+
+function compactToolName(toolName: string): string {
+  const codepoints = Array.from(toolName);
+  if (codepoints.length <= MAX_PROGRESS_TOOL_NAME_CODEPOINTS) return toolName;
+  return `${codepoints.slice(0, MAX_PROGRESS_TOOL_NAME_CODEPOINTS).join("")}…`;
 }
 
 function profileLabel(profile: DelegateProfile | DelegateProfile["name"]): string {
@@ -197,14 +202,30 @@ function formatRenderedResult(
   return output ? `${header}\n${output}` : header;
 }
 
-function formatProgress(profile: DelegateProfile, progress: DelegateProgress): string {
-  const label = profileLabel(profile);
+function formatProgress(
+  progress: DelegateProgress,
+  summary: ToolProgressSummary,
+): string {
   if (progress.type === "tool_start") {
-    const toolName = Array.from(progress.toolName).slice(0, 80).join("");
-    return `${label} started ${toolName}`;
+    summary.totalCalls += 1;
+    summary.recentTools.push(compactToolName(progress.toolName));
+    if (summary.recentTools.length > MAX_RECENT_PROGRESS_TOOLS) summary.recentTools.shift();
   }
-  const preview = progress.text === undefined ? "" : compactText(progress.text);
-  return preview ? `${label}: ${preview}` : `${label} completed an assistant message`;
+  if (summary.totalCalls === 0) return "Working · no tool calls yet";
+
+  const runs: Array<{ name: string; count: number }> = [];
+  for (const toolName of summary.recentTools) {
+    const previous = runs.at(-1);
+    if (previous?.name === toolName) previous.count += 1;
+    else runs.push({ name: toolName, count: 1 });
+  }
+  const order = runs
+    .map(({ name, count }) => count === 1 ? name : `${name} ×${count}`)
+    .join(" → ");
+  const omitted = summary.totalCalls - summary.recentTools.length;
+  const earlier = omitted === 0 ? "" : `… ${omitted} earlier → `;
+  const calls = summary.totalCalls === 1 ? "tool call" : "tool calls";
+  return `${summary.totalCalls} ${calls}: ${earlier}${order}`;
 }
 
 async function resolveWorkingDirectory(requested: string | undefined, parentCwd: string): Promise<string> {
@@ -251,6 +272,7 @@ export default function piDelegator(pi: ExtensionAPI): void {
         (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
       const thinking = profileDefaults?.thinking ?? profile.thinking;
       const startedAt = Date.now();
+      const toolProgress: ToolProgressSummary = { totalCalls: 0, recentTools: [] };
       const result = await runDelegate({
         profile,
         task: params.task,
@@ -263,7 +285,7 @@ export default function piDelegator(pi: ExtensionAPI): void {
           : {
               onProgress: (progress: DelegateProgress) => {
                 onUpdate({
-                  content: [{ type: "text", text: formatProgress(profile, progress) }],
+                  content: [{ type: "text", text: formatProgress(progress, toolProgress) }],
                   details: progressDetails(
                     profile,
                     model,
