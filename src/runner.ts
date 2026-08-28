@@ -92,7 +92,7 @@ export interface RunDelegateOptions {
   readonly task: string;
   readonly cwd: string;
   readonly model?: string;
-  /** Thinking override. The selected profile remains the default. */
+  /** Effective thinking level resolved from user configuration or the built-in profile. */
   readonly thinking?: DelegateThinkingLevel;
   /** Caller deadline override. It may shorten, but never lengthen, the profile deadline. */
   readonly timeoutMs?: number;

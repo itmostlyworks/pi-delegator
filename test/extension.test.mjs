@@ -55,12 +55,11 @@ test("registers exactly the delegate tool with a closed four-profile schema", ()
   const tool = registeredTool();
   assert.equal(tool.name, "delegate");
   assert.equal(tool.parameters.additionalProperties, false);
-  assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "task", "model", "thinking", "cwd", "timeoutMs"]);
+  assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "task", "model", "cwd", "timeoutMs"]);
   assert.deepEqual(tool.parameters.properties.agent.enum, ["scout", "reviewer", "oracle", "worker"]);
-  assert.deepEqual(tool.parameters.properties.thinking.enum, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  assert.equal(Object.hasOwn(tool.parameters.properties, "thinking"), false);
   assert.equal(tool.parameters.properties.model.maxLength, MAX_MODEL_BYTES);
   assert.match(tool.parameters.properties.model.description, /user's profile default.*parent session model/);
-  assert.match(tool.parameters.properties.thinking.description, /user's profile default.*built-in profile level/);
   assert.equal(tool.parameters.properties.timeoutMs.minimum, 1);
 });
 
@@ -179,10 +178,6 @@ test("rejects blank and oversized UTF-8 tasks and invalid deadlines before launc
     tool.execute("id", { agent: "scout", task: "Inspect", model: "é".repeat(MAX_MODEL_BYTES) }, undefined, undefined, context(process.cwd())),
     /model exceeds.*UTF-8 limit/,
   );
-  await assert.rejects(
-    tool.execute("id", { agent: "scout", task: "Inspect", thinking: "extreme" }, undefined, undefined, context(process.cwd())),
-    /Unknown delegate thinking level/,
-  );
 });
 
 test("rejects invalid user configuration during extension startup", () => {
@@ -211,7 +206,7 @@ test("rejects nonexistent and non-directory cwd values", async () => {
   }
 });
 
-test("applies model/thinking overrides and streams compact progress with usage", async () => {
+test("applies a model override while preserving profile thinking and streams compact progress with usage", async () => {
   const tool = registeredTool();
   const fixture = resolve("test/fixtures/fake-pi.mjs");
   const directory = await mkdtemp(join(tmpdir(), "pi-delegator-overrides-"));
@@ -228,14 +223,14 @@ test("applies model/thinking overrides and streams compact progress with usage",
   try {
     const result = await tool.execute(
       "id",
-      { agent: "reviewer", task: "Review", model: " override/model ", thinking: "medium" },
+      { agent: "reviewer", task: "Review", model: " override/model " },
       undefined,
       (update) => updates.push(update),
       context(directory),
     );
     assert.equal(result.details.agent, "reviewer");
     assert.equal(result.details.model, "override/model");
-    assert.equal(result.details.thinking, "medium");
+    assert.equal(result.details.thinking, "high");
     assert.deepEqual(updates.map((update) => update.content[0].text), [
       "Reviewer: Inspecting code",
       "Reviewer started read",
@@ -245,7 +240,7 @@ test("applies model/thinking overrides and streams compact progress with usage",
     assert.equal(result.details.usage.input, 8);
     const args = JSON.parse(await readFile(recordPath, "utf8"));
     assert.equal(args[args.indexOf("--model") + 1], "override/model");
-    assert.equal(args[args.indexOf("--thinking") + 1], "medium");
+    assert.equal(args[args.indexOf("--thinking") + 1], "high");
 
     process.env.FAKE_PI_RECORD_PATH = defaultRecordPath;
     const inherited = await tool.execute(
@@ -271,7 +266,7 @@ test("applies model/thinking overrides and streams compact progress with usage",
   }
 });
 
-test("applies immutable user defaults with call-first precedence", async () => {
+test("applies immutable user defaults with model-only call precedence", async () => {
   const tool = registeredTool({
     scout: { model: "configured/scout" },
     reviewer: { model: "configured/reviewer", thinking: "minimal" },
@@ -306,13 +301,13 @@ test("applies immutable user defaults with call-first precedence", async () => {
     process.env.FAKE_PI_RECORD_PATH = overridePath;
     const overridden = await tool.execute(
       "overridden",
-      { agent: "reviewer", task: "Review", model: "call/model", thinking: "xhigh" },
+      { agent: "reviewer", task: "Review", model: "call/model" },
       undefined,
       undefined,
       context(directory),
     );
     assert.equal(overridden.details.model, "call/model");
-    assert.equal(overridden.details.thinking, "xhigh");
+    assert.equal(overridden.details.thinking, "minimal");
 
     const unchangedPath = join(directory, "unchanged.json");
     process.env.FAKE_PI_RECORD_PATH = unchangedPath;
@@ -336,15 +331,15 @@ test("applies immutable user defaults with call-first precedence", async () => {
     assert.equal(modelOnly.details.model, "configured/scout");
     assert.equal(modelOnly.details.thinking, "low");
 
-    const thinkingOnly = await tool.execute(
-      "thinking-only",
+    const configuredThinking = await tool.execute(
+      "configured-thinking",
       { agent: "oracle", task: "Advise" },
       undefined,
       undefined,
       context(directory),
     );
-    assert.equal(thinkingOnly.details.model, "example/model");
-    assert.equal(thinkingOnly.details.thinking, "medium");
+    assert.equal(configuredThinking.details.model, "example/model");
+    assert.equal(configuredThinking.details.thinking, "medium");
 
     const inherited = await tool.execute(
       "inherited",

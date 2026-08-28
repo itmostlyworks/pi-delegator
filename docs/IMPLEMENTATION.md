@@ -52,14 +52,14 @@ Deliver:
 - reviewer, oracle, and worker profiles
 - fixed role prompts/tool allowlists/default thinking/deadlines
 - compact `onUpdate` progress
-- optional caller model and thinking overrides
+- optional caller model override; thinking remains profile-controlled
 - optional caller timeout that can only shorten the profile deadline
 - usage aggregation from assistant events
 
 Acceptance:
 
 - Each profile launches with the expected default CLI contract.
-- Valid model/thinking overrides affect only the selected call.
+- Valid model overrides affect only the selected call; thinking cannot be supplied by the caller.
 - Reviewer/oracle cannot mutate through built-in tools.
 - Worker receives mutation tools.
 - Parallel calls keep outputs and lifecycle state isolated.
@@ -70,7 +70,8 @@ Deliver:
 
 - optional user-level configuration at the Pi agent directory (for example `~/.pi/agent/pi-delegator.json`)
 - per-profile `model` and `thinking` defaults only
-- precedence: call override → user-level config → inherited parent model/profile thinking
+- model precedence: call override → user-level config → inherited parent model
+- thinking precedence: user-level config → built-in profile thinking
 - strict bounded validation with actionable startup errors
 - tests proving independent calls do not mutate loaded defaults
 
@@ -78,7 +79,7 @@ Acceptance:
 
 - With no config file, behavior is unchanged.
 - Configured model/thinking defaults apply to the named profile.
-- Per-call model/thinking fields override configured defaults.
+- Per-call model fields override configured model defaults; thinking cannot be overridden per call.
 - Unknown profiles, fields, and thinking levels are rejected precisely.
 - Configuration cannot change prompts, tools, deadlines, or lifecycle behavior.
 - Project-local configuration is not discovered or honored.
@@ -162,8 +163,8 @@ If implemented in V1:
 ### Profiles and concurrency
 
 - each profile emits expected inherited model/default thinking/tools arguments
-- call model/thinking overrides replace those defaults for only that call
-- invalid or oversized model/thinking overrides are rejected
+- call model overrides replace model defaults for only that call; thinking is absent from the tool schema
+- invalid or oversized model overrides are rejected
 - call timeout shortens profile deadline
 - call timeout cannot lengthen profile deadline
 - two concurrent delegate calls return their own output

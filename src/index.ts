@@ -8,7 +8,6 @@ import { Type } from "typebox";
 
 import {
   DELEGATE_AGENT_NAMES,
-  DELEGATE_THINKING_LEVELS,
   getDelegateProfile,
   type DelegateProfile,
   type DelegateThinkingLevel,
@@ -48,11 +47,6 @@ const DelegateParameters = Type.Object(
         description: "Pi model selector; defaults to the user's profile default, then the parent session model",
         minLength: 1,
         maxLength: MAX_MODEL_BYTES,
-      }),
-    ),
-    thinking: Type.Optional(
-      StringEnum(DELEGATE_THINKING_LEVELS, {
-        description: "Pi thinking level; defaults to the user's profile default, then the built-in profile level",
       }),
     ),
     cwd: Type.Optional(
@@ -237,7 +231,7 @@ export default function piDelegator(pi: ExtensionAPI): void {
   pi.registerTool<typeof DelegateParameters, DelegateDetails>({
     name: "delegate",
     label: "Delegate",
-    description: "Run one bounded task with a fixed-role Scout, Reviewer, Oracle, or Worker profile in a fresh Pi subprocess; model and thinking may be overridden.",
+    description: "Run one bounded task with a fixed-role Scout, Reviewer, Oracle, or Worker profile in a fresh Pi subprocess; the model may be overridden, while thinking is fixed by profile configuration.",
     promptSnippet: "Delegate one bounded reconnaissance, review, advisory, or implementation task to a fresh context",
     promptGuidelines: [
       "Use delegate when a focused reconnaissance, review, advisory, or implementation task benefits from a fresh bounded context.",
@@ -260,13 +254,6 @@ export default function piDelegator(pi: ExtensionAPI): void {
         params.model === undefined
           ? undefined
           : normalizeModelSelector(params.model, "Delegate model");
-      if (
-        params.thinking !== undefined &&
-        !DELEGATE_THINKING_LEVELS.includes(params.thinking)
-      ) {
-        throw new Error(`Unknown delegate thinking level: ${String(params.thinking)}`);
-      }
-
       const profile = getDelegateProfile(params.agent);
       const profileDefaults = configuredDefaults[profile.name];
       const cwd = await resolveWorkingDirectory(params.cwd, ctx.cwd);
@@ -274,7 +261,7 @@ export default function piDelegator(pi: ExtensionAPI): void {
         requestedModel ??
         profileDefaults?.model ??
         (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
-      const thinking = params.thinking ?? profileDefaults?.thinking ?? profile.thinking;
+      const thinking = profileDefaults?.thinking ?? profile.thinking;
       const startedAt = Date.now();
       const result = await runDelegate({
         profile,

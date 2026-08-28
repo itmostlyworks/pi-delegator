@@ -6,7 +6,7 @@ A small, reliability-first delegation extension for [Pi](https://github.com/eare
 
 ## Status
 
-The v0.1.0 implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls. Live-provider checks remain a manual release step; see [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md).
+The v0.2.0 implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls. Live-provider checks remain a manual release step; see [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md).
 
 ## Requirements
 
@@ -26,16 +26,16 @@ Install the current Git repository:
 pi install git:github.com/ludwigbacklund/pi-delegator
 ```
 
-Install a pinned release after the `v0.1.0` tag is available:
+Install the pinned `v0.2.0` release:
 
 ```bash
-pi install git:github.com/ludwigbacklund/pi-delegator@v0.1.0
+pi install git:github.com/ludwigbacklund/pi-delegator@v0.2.0
 ```
 
 After publication to npm, the equivalent command is:
 
 ```bash
-pi install npm:pi-delegator@0.1.0
+pi install npm:pi-delegator@0.2.0
 ```
 
 For local development:
@@ -68,7 +68,6 @@ delegate({
   agent: "scout" | "reviewer" | "oracle" | "worker",
   task: "Inspect the authentication flow and identify the relevant files",
   model: "anthropic/claude-sonnet-4-5", // optional
-  thinking: "medium",                  // optional
   cwd: "/path/to/project",             // optional
   timeoutMs: 120_000                    // optional; may only shorten the profile limit
 })
@@ -92,10 +91,9 @@ Only `worker` receives the dedicated `edit` and `write` tools. Reviewer receives
 - `task` is required, must not be blank, and is limited to 32 KiB of UTF-8.
 - `cwd` defaults to the parent session directory and must be an existing directory.
 - `model` uses a Pi `provider/model` selector and is limited to 256 UTF-8 bytes.
-- `thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
 - `timeoutMs` must be positive and can only shorten the selected profile's deadline.
 - Model precedence is call override → user profile default → parent session model.
-- Thinking precedence is call override → user profile default → built-in profile default.
+- Thinking is not a tool input; its precedence is user profile default → built-in profile default.
 
 ## User defaults
 
@@ -119,7 +117,7 @@ Project-local delegate configuration and custom profiles are not discovered.
 
 ### TUI output
 
-Delegate results show the selected profile, model selector, thinking level, and duration above the returned text. These are the effective launch settings after call, user-default, and parent-session precedence; Pi may still resolve a fuzzy model selector or clamp thinking to the selected model's capabilities. The collapsed view uses the model ID and bounds the output preview by both lines and text length; expand the tool result to see the full provider/model selector and complete returned text.
+Delegate results show the selected profile, model selector, thinking level, and duration above the returned text. The model reflects call, user-default, and parent-session precedence; thinking reflects user-default and built-in precedence. Pi may still resolve a fuzzy model selector or clamp thinking to the selected model's capabilities. The collapsed view uses the model ID and bounds the output preview by both lines and text length; expand the tool result to see the full provider/model selector and complete returned text.
 
 This metadata is display-only. The model-visible tool result remains the delegate's bounded response text.
 
@@ -138,7 +136,7 @@ Model-visible output is bounded:
 
 ## Deliberate limitations
 
-v0.1.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
+v0.2.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
 
 ## Development
 

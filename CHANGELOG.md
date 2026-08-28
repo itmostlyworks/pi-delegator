@@ -2,6 +2,12 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.2.0] - 2026-08-28
+
+### Changed
+
+- Removed the model-facing per-call `thinking` input. Delegate thinking now comes only from user-level profile configuration or the built-in profile default.
+
 ## [0.1.0] - 2026-08-27
 
 ### Added
@@ -16,4 +22,5 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.2.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ludwigbacklund/pi-delegator/releases/tag/v0.1.0
