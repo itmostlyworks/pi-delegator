@@ -138,6 +138,66 @@ test("launches every fixed profile with isolated CLI contracts and outputs", asy
   });
 });
 
+test("loads only each concurrent profile's explicit capabilities and tool allowlist", async () => {
+  await withTempDir(async (cwd) => {
+    const skillA = join(cwd, "skill-a.md");
+    const skillB = join(cwd, "skill-b");
+    const extensionA = join(cwd, "extension-a.ts");
+    const extensionB = join(cwd, "extension-b.mjs");
+    const profiles = [
+      {
+        ...SCOUT_PROFILE,
+        name: "alpha",
+        tools: ["read", "alpha_tool"],
+        skills: [skillA],
+        extensions: [extensionA],
+      },
+      {
+        ...SCOUT_PROFILE,
+        name: "beta",
+        tools: ["find", "beta_tool"],
+        skills: [skillB],
+        extensions: [extensionB],
+      },
+    ];
+
+    const runs = await Promise.all(profiles.map(async (profile) => {
+      const recordPath = join(cwd, `${profile.name}-capabilities.json`);
+      const result = await runDelegate({
+        profile,
+        task: `Run ${profile.name}`,
+        cwd,
+        env: fixtureEnv("clean", {
+          FAKE_PI_OUTPUT: `${profile.name} output`,
+          FAKE_PI_RECORD_PATH: recordPath,
+        }),
+        cleanupGraceMs: 50,
+        exitDrainMs: 20,
+      });
+      return { profile, result, args: JSON.parse(await readFile(recordPath, "utf8")) };
+    }));
+
+    for (const { profile, result, args } of runs) {
+      assert.equal(result.ok, true);
+      assert.ok(args.includes("--no-skills"));
+      assert.ok(args.includes("--no-extensions"));
+      assert.equal(args[args.indexOf("--tools") + 1], profile.tools.join(","));
+      assert.deepEqual(
+        args.flatMap((argument, index) => argument === "--skill" ? [args[index + 1]] : []),
+        profile.skills,
+      );
+      assert.deepEqual(
+        args.flatMap((argument, index) => argument === "--extension" ? [args[index + 1]] : []),
+        profile.extensions,
+      );
+      const sibling = profiles.find((candidate) => candidate.name !== profile.name);
+      assert.equal(args.includes(sibling.skills[0]), false);
+      assert.equal(args.includes(sibling.extensions[0]), false);
+      assert.equal(args[args.indexOf("--tools") + 1].includes(sibling.tools[1]), false);
+    }
+  });
+});
+
 test("streams compact protocol progress data and aggregates usage", async () => {
   await withTempDir(async (cwd) => {
     const progress = [];

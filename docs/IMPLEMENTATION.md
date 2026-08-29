@@ -70,7 +70,7 @@ Deliver:
 
 - optional bounded user-level configuration at the Pi agent directory
 - a `profiles` map whose entries add or completely replace profiles, or disable names with `null`
-- complete definitions for description, model, thinking, prompt, tools, empty capability arrays, and bounded deadline
+- complete definitions for description, model, thinking, prompt, tools, explicit local capability arrays, and bounded deadline
 - model precedence: call override → effective profile → inherited parent model
 - strict validation with source/profile/corrective startup diagnostics
 - tests proving the loaded registry and independent calls remain immutable
@@ -83,7 +83,7 @@ Acceptance:
 - Legacy, incomplete, malformed, and unsafe configuration fails before delegation.
 - Project-local configuration is not discovered or honored in this slice.
 
-Keep the effective registry immutable after extension startup. Explicit non-empty skill/extension loading, project profiles, generic per-call overrides, and dynamic reload remain separate work.
+Keep the effective registry immutable after extension startup. Validate and canonicalize explicit local skill/extension paths before launch while retaining ambient discovery isolation. Project profiles, generic per-call overrides, and dynamic reload remain separate work.
 
 ## Stage 5: package polish
 

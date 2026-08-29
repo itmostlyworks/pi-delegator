@@ -95,7 +95,7 @@ Bundled profile models are null, so the child inherits the parent model unless t
 
 ## User profile configuration
 
-The bounded user document at the Pi agent directory's `pi-delegator.json` contains a `profiles` map. Each name maps to `null`, which disables it, or a complete definition containing `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, `extensions`, and `deadlineMs`. Definitions replace whole profiles; there is no inheritance or field merging. Prompt paths resolve relative to the source document and identify non-empty Markdown files. In the first profile-management slice, `skills` and `extensions` are required empty arrays.
+The bounded user document at the Pi agent directory's `pi-delegator.json` contains a `profiles` map. Each name maps to `null`, which disables it, or a complete definition containing `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, `extensions`, and `deadlineMs`. Definitions replace whole profiles; there is no inheritance or field merging. Prompt and capability paths resolve relative to the source document. Skills identify explicit local Markdown files or directories, and extensions identify explicit local JavaScript or TypeScript files. Capability paths are canonicalized and must be readable, supported, and unique; remote sources and pi-delegator itself are rejected before launch.
 
 Configuration is immutable after extension startup. Invalid, incomplete, legacy, or unsafe sources prevent registration and identify the source, affected profile, and corrective action. Profile deadlines remain below a package-controlled hard ceiling, tool lists cannot enable nested `delegate` calls, and project configuration is not loaded in this slice.
 

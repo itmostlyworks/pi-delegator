@@ -332,6 +332,8 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     "--no-extensions",
     "--no-skills",
   ];
+  for (const skill of options.profile.skills) childArgs.push("--skill", skill);
+  for (const extension of options.profile.extensions) childArgs.push("--extension", extension);
   if (options.model) childArgs.push("--model", options.model);
   childArgs.push(
     "--thinking",

@@ -95,6 +95,8 @@ pi \
   --no-session \
   --no-extensions \
   --no-skills \
+  [--skill <explicit-local-path>]... \
+  [--extension <explicit-local-path>]... \
   --model <effective-provider/model> \
   --thinking <effective-level> \
   --tools <profile-tools> \
@@ -112,6 +114,7 @@ Requirements:
 - Set `detached: true` on POSIX so the child owns a process group.
 - Ignore stdin; pipe stdout/stderr.
 - Do not pass parent extension paths or session files.
+- Keep ambient extension and skill discovery disabled; add only the selected profile's validated explicit local capability paths with repeated CLI flags.
 - Preserve only the environment needed for provider authentication and normal Pi operation. V1 may inherit the environment, but must overwrite any internal recursion/depth variables it introduces.
 
 ## Prompt assembly

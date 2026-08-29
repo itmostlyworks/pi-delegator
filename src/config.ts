@@ -1,10 +1,14 @@
 import {
+  accessSync,
   closeSync,
   constants as fsConstants,
   fstatSync,
   openSync,
   readSync,
+  realpathSync,
+  statSync,
 } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -37,6 +41,10 @@ const PROFILE_FIELDS = [
 ] as const;
 const PROFILE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
 const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/u;
+const REMOTE_CAPABILITY_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:/u;
+const EXTENSION_FILE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
+const DELEGATOR_EXTENSION_PATH = realpathSync(fileURLToPath(new URL("./index.ts", import.meta.url)));
+const DELEGATOR_EXTENSION_IDENTITY = statSync(DELEGATOR_EXTENSION_PATH);
 
 function configError(path: string, message: string): Error {
   return new Error(`Invalid pi-delegator config at ${path}: ${message}`);
@@ -128,21 +136,95 @@ function validateProfileName(path: string, profileName: string): void {
   }
 }
 
-function validateEmptyCapabilities(
+function parseCapabilities(
   path: string,
   profileName: string,
   field: "skills" | "extensions",
   value: unknown,
-): readonly [] {
-  if (!Array.isArray(value) || value.length !== 0) {
-    throw profileError(
-      path,
-      profileName,
-      `${field} must be an empty array in this release`,
-      `set ${field} to []; explicit capability loading is introduced separately`,
-    );
+): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw profileError(path, profileName, `${field} must be an array`, `provide an array of explicit local ${field} paths`);
   }
-  return Object.freeze([]);
+
+  const capabilities: string[] = [];
+  for (const configuredPath of value) {
+    if (typeof configuredPath !== "string" || configuredPath.trim().length === 0) {
+      throw profileError(
+        path,
+        profileName,
+        `${field} contains invalid path ${JSON.stringify(configuredPath)}`,
+        `use non-blank local filesystem paths in ${field}`,
+      );
+    }
+    const setting = configuredPath.trim();
+    if (REMOTE_CAPABILITY_PATTERN.test(setting)) {
+      throw profileError(
+        path,
+        profileName,
+        `${field} path ${JSON.stringify(setting)} is not a supported local filesystem path`,
+        "use a local file or directory path; remote npm, git, and URL sources are not supported",
+      );
+    }
+
+    const resolvedPath = isAbsolute(setting) ? resolve(setting) : resolve(dirname(path), setting);
+    let canonicalPath: string;
+    let stats: ReturnType<typeof statSync>;
+    try {
+      canonicalPath = realpathSync(resolvedPath);
+      stats = statSync(canonicalPath);
+      accessSync(canonicalPath, fsConstants.R_OK);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw profileError(
+        path,
+        profileName,
+        `${field} path ${resolvedPath} could not be read: ${reason}`,
+        `point ${field} to existing readable local capabilities`,
+      );
+    }
+
+    if (field === "skills") {
+      if (!stats.isDirectory() && !(stats.isFile() && extname(canonicalPath).toLowerCase() === ".md")) {
+        throw profileError(
+          path,
+          profileName,
+          `skills path ${canonicalPath} is unsupported`,
+          "point skills to a Markdown skill file or a skill directory",
+        );
+      }
+    } else {
+      if (!stats.isFile() || !EXTENSION_FILE_EXTENSIONS.has(extname(canonicalPath).toLowerCase())) {
+        throw profileError(
+          path,
+          profileName,
+          `extensions path ${canonicalPath} is unsupported`,
+          "point extensions to a local JavaScript or TypeScript extension file",
+        );
+      }
+      if (
+        canonicalPath === DELEGATOR_EXTENSION_PATH ||
+        (stats.dev === DELEGATOR_EXTENSION_IDENTITY.dev && stats.ino === DELEGATOR_EXTENSION_IDENTITY.ino)
+      ) {
+        throw profileError(
+          path,
+          profileName,
+          `extensions may not explicitly load pi-delegator because nested delegation is forbidden`,
+          "remove pi-delegator from extensions",
+        );
+      }
+    }
+
+    if (capabilities.includes(canonicalPath)) {
+      throw profileError(
+        path,
+        profileName,
+        `${field} contains duplicate path ${canonicalPath}`,
+        `remove duplicate ${field} paths, including aliases and symlinks to the same capability`,
+      );
+    }
+    capabilities.push(canonicalPath);
+  }
+  return Object.freeze(capabilities);
 }
 
 function loadPrompt(path: string, profileName: string, configuredPath: unknown): string {
@@ -248,8 +330,8 @@ function parseProfile(path: string, profileName: string, value: unknown): Delega
     thinking: value.thinking as DelegateThinkingLevel,
     systemPrompt: loadPrompt(path, profileName, value.prompt),
     tools: parseTools(path, profileName, value.tools),
-    skills: validateEmptyCapabilities(path, profileName, "skills", value.skills),
-    extensions: validateEmptyCapabilities(path, profileName, "extensions", value.extensions),
+    skills: parseCapabilities(path, profileName, "skills", value.skills),
+    extensions: parseCapabilities(path, profileName, "extensions", value.extensions),
     timeoutMs: value.deadlineMs as number,
   });
 }

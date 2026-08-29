@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -18,11 +18,21 @@ import { BUNDLED_PROFILES, DELEGATE_THINKING_LEVELS } from "../src/agents.ts";
 async function temporaryConfig() {
   const directory = await mkdtemp(join(tmpdir(), "pi-delegator-config-"));
   const prompt = join(directory, "custom.md");
+  const skill = join(directory, "skill.md");
+  const skillDirectory = join(directory, "skill-directory");
+  const extension = join(directory, "extension.ts");
   await writeFile(prompt, "Custom role prompt\n");
+  await writeFile(skill, "---\nname: fixture-skill\ndescription: Fixture skill\n---\n");
+  await mkdir(skillDirectory);
+  await writeFile(join(skillDirectory, "SKILL.md"), "---\nname: directory-skill\ndescription: Directory skill\n---\n");
+  await writeFile(extension, "export default function () {}\n");
   return {
     directory,
     path: join(directory, DELEGATE_CONFIG_FILENAME),
     prompt,
+    skill,
+    skillDirectory,
+    extension,
     async cleanup() {
       await rm(directory, { recursive: true, force: true });
     },
@@ -106,6 +116,52 @@ test("adds, completely replaces, disables, normalizes, and freezes user profiles
   }
 });
 
+test("resolves, validates, and freezes explicit local capability paths", async () => {
+  const fixture = await temporaryConfig();
+  try {
+    await writeFile(
+      fixture.path,
+      JSON.stringify({
+        profiles: {
+          custom: completeProfile({
+            skills: ["skill.md", "skill-directory"],
+            extensions: ["extension.ts"],
+          }),
+        },
+      }),
+    );
+
+    const profile = loadDelegateProfiles(fixture.path).custom;
+    assert.deepEqual(profile.skills, [await realpath(fixture.skill), await realpath(fixture.skillDirectory)]);
+    assert.deepEqual(profile.extensions, [await realpath(fixture.extension)]);
+    assert.equal(Object.isFrozen(profile.skills), true);
+    assert.equal(Object.isFrozen(profile.extensions), true);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("rejects duplicate capability aliases and explicit pi-delegator loading", async () => {
+  const fixture = await temporaryConfig();
+  try {
+    const skillAlias = join(fixture.directory, "skill-alias.md");
+    const delegatorHardLink = join(fixture.directory, "delegator-alias.ts");
+    await symlink(fixture.skill, skillAlias);
+    await link(resolve("src/index.ts"), delegatorHardLink);
+    for (const [overrides, expected] of [
+      [{ skills: ["skill.md", "./skill.md"] }, /skills contains duplicate path/],
+      [{ skills: ["skill.md", "skill-alias.md"] }, /skills contains duplicate path/],
+      [{ extensions: [resolve("src/index.ts")] }, /may not explicitly load pi-delegator/],
+      [{ extensions: ["delegator-alias.ts"] }, /may not explicitly load pi-delegator/],
+    ]) {
+      await writeFile(fixture.path, JSON.stringify({ profiles: { custom: completeProfile(overrides) } }));
+      assertConfigError(() => loadDelegateProfiles(fixture.path), fixture.path, "custom", expected);
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("rejects legacy, malformed, incomplete, and unknown configuration with corrective diagnostics", async () => {
   const fixture = await temporaryConfig();
   try {
@@ -140,8 +196,14 @@ test("rejects unsafe or invalid complete profile fields before delegation", asyn
       [completeProfile({ tools: ["read", "read"] }), /duplicate/],
       [completeProfile({ tools: ["delegate"] }), /nested delegation is forbidden/],
       [completeProfile({ tools: ["bad/tool"] }), /invalid name/],
-      [completeProfile({ skills: ["skill.md"] }), /skills must be an empty array/],
-      [completeProfile({ extensions: ["extension.ts"] }), /extensions must be an empty array/],
+      [completeProfile({ skills: "skill.md" }), /skills must be an array/],
+      [completeProfile({ skills: [""] }), /skills contains invalid path/],
+      [completeProfile({ skills: ["missing.md"] }), /skills path .* could not be read/],
+      [completeProfile({ skills: ["extension.ts"] }), /skills path .* is unsupported/],
+      [completeProfile({ extensions: ["missing.ts"] }), /extensions path .* could not be read/],
+      [completeProfile({ extensions: ["custom.md"] }), /extensions path .* is unsupported/],
+      [completeProfile({ extensions: ["."] }), /extensions path .* is unsupported/],
+      [completeProfile({ extensions: ["npm:example-extension"] }), /not a supported local filesystem path/],
       [completeProfile({ deadlineMs: 0 }), /deadlineMs must be a positive integer/],
       [completeProfile({ deadlineMs: MAX_PROFILE_DEADLINE_MS + 1 }), /deadlineMs must be a positive integer/],
       [completeProfile({ prompt: "missing.md" }), /could not be read/],

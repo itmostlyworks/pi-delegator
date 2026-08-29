@@ -127,9 +127,9 @@ The five bundled profiles above remain available without configuration. To add, 
 }
 ```
 
-`null` disables a name. An object atomically replaces any bundled profile of the same name and must contain every field shown; profiles never inherit or merge fields. `model: null` inherits the parent model. Prompt paths resolve relative to the configuration file and must identify non-empty UTF-8 Markdown files. Deadlines are positive integers capped at 20 minutes. `delegate` cannot appear in `tools`.
+`null` disables a name. An object atomically replaces any bundled profile of the same name and must contain every field shown; profiles never inherit or merge fields. `model: null` inherits the parent model. Prompt and capability paths resolve relative to the configuration file. `skills` accepts explicit local Markdown skill files or skill directories; `extensions` accepts explicit local JavaScript or TypeScript extension files. Remote package sources are not supported. Deadlines are positive integers capped at 20 minutes. `delegate` cannot appear in `tools`, and `extensions` cannot load pi-delegator itself.
 
-In this release, `skills` and `extensions` are required but must remain empty. Configuration is validated and loaded once at extension startup; invalid or legacy partial configuration prevents delegation with an actionable source/profile diagnostic. Start a new Pi session after editing it.
+Configuration is validated and loaded once at extension startup. Missing, unreadable, unsupported, or duplicate capability paths and invalid or legacy partial configuration prevent delegation with an actionable source/profile diagnostic. Start a new Pi session after editing it.
 
 Project-local delegate configuration is not discovered.
 
@@ -141,7 +141,7 @@ This metadata is display-only. The model-visible tool result remains the delegat
 
 ## Lifecycle and limits
 
-Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables extension and skill discovery, preventing recursive delegation and ambient child behavior. It still receives Pi's normal coding prompt and trusted project instructions.
+Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables ambient extension and skill discovery; only the selected profile's explicit local capabilities are added back. This prevents recursive delegation and ambient child behavior. It still receives Pi's normal coding prompt and trusted project instructions.
 
 The runner enforces a hard wall-clock deadline and propagates parent cancellation to the entire process group using bounded TERM → KILL cleanup. It does not wait exclusively for stdio to close, so descendants holding pipes open cannot leave the tool pending indefinitely. A validated terminal answer remains successful if forced post-answer cleanup is required, and cleanup details are returned with the tool result.
 
