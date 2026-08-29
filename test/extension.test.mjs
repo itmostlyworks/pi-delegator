@@ -9,6 +9,7 @@ import {
   ORACLE_PROFILE,
   REVIEWER_PROFILE,
   SCOUT_PROFILE,
+  TESTER_PROFILE,
   WORKER_PROFILE,
 } from "../src/agents.ts";
 import { DELEGATE_CONFIG_FILENAME } from "../src/config.ts";
@@ -51,12 +52,12 @@ function renderText(component, width = 200) {
   return component.render(width).map((line) => line.trimEnd()).join("\n");
 }
 
-test("registers exactly the delegate tool with a closed four-profile schema", () => {
+test("registers exactly the delegate tool with a closed five-profile schema", () => {
   const tool = registeredTool();
   assert.equal(tool.name, "delegate");
   assert.equal(tool.parameters.additionalProperties, false);
   assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "task", "model", "cwd"]);
-  assert.deepEqual(tool.parameters.properties.agent.enum, ["scout", "reviewer", "oracle", "worker"]);
+  assert.deepEqual(tool.parameters.properties.agent.enum, ["scout", "reviewer", "oracle", "tester", "worker"]);
   assert.equal(Object.hasOwn(tool.parameters.properties, "thinking"), false);
   assert.equal(Object.hasOwn(tool.parameters.properties, "timeoutMs"), false);
   assert.equal(tool.parameters.properties.model.maxLength, MAX_MODEL_BYTES);
@@ -129,7 +130,7 @@ test("renders selected delegate model and thinking metadata without changing res
 
 test("fixed profiles expose their documented thinking, deadlines, and tools", () => {
   assert.deepEqual(
-    [SCOUT_PROFILE, REVIEWER_PROFILE, ORACLE_PROFILE, WORKER_PROFILE].map((profile) => ({
+    [SCOUT_PROFILE, REVIEWER_PROFILE, ORACLE_PROFILE, TESTER_PROFILE, WORKER_PROFILE].map((profile) => ({
       name: profile.name,
       thinking: profile.thinking,
       timeoutMs: profile.timeoutMs,
@@ -139,6 +140,7 @@ test("fixed profiles expose their documented thinking, deadlines, and tools", ()
       { name: "scout", thinking: "low", timeoutMs: 180_000, tools: ["read", "grep", "find", "ls"] },
       { name: "reviewer", thinking: "high", timeoutMs: 600_000, tools: ["read", "grep", "find", "ls", "bash"] },
       { name: "oracle", thinking: "high", timeoutMs: 600_000, tools: ["read", "grep", "find", "ls"] },
+      { name: "tester", thinking: "high", timeoutMs: 1_200_000, tools: ["read", "grep", "find", "ls", "bash"] },
       { name: "worker", thinking: "high", timeoutMs: 1_200_000, tools: ["read", "grep", "find", "ls", "bash", "edit", "write"] },
     ],
   );
@@ -147,11 +149,17 @@ test("fixed profiles expose their documented thinking, deadlines, and tools", ()
   assert.equal(ORACLE_PROFILE.tools.includes("bash"), false);
   assert.equal(ORACLE_PROFILE.tools.includes("edit"), false);
   assert.equal(ORACLE_PROFILE.tools.includes("write"), false);
+  assert.equal(TESTER_PROFILE.tools.includes("bash"), true);
+  assert.equal(TESTER_PROFILE.tools.includes("edit"), false);
+  assert.equal(TESTER_PROFILE.tools.includes("write"), false);
   assert.equal(WORKER_PROFILE.tools.includes("bash"), true);
   assert.equal(WORKER_PROFILE.tools.includes("edit"), true);
   assert.equal(WORKER_PROFILE.tools.includes("write"), true);
   assert.match(REVIEWER_PROFILE.systemPrompt, /Do not modify files/);
   assert.match(ORACLE_PROFILE.systemPrompt, /do not modify files/);
+  assert.match(TESTER_PROFILE.systemPrompt, /exercising its real behavior/);
+  assert.match(TESTER_PROFILE.systemPrompt, /Do not edit source or configuration files/);
+  assert.match(TESTER_PROFILE.systemPrompt, /clean up processes and test state/);
   assert.match(WORKER_PROFILE.systemPrompt, /Implement one clearly bounded coding task/);
 });
 

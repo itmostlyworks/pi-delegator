@@ -18,11 +18,12 @@ The primary user is a Pi coding agent orchestrating local software work. A human
 
 1. As a parent agent, I can ask a scout to inspect a codebase without filling my context with discovery work.
 2. As a parent agent, I can ask a reviewer or oracle for a fresh-context opinion.
-3. As a parent agent, I can hand one bounded implementation task to a worker.
-4. As a parent agent, I can launch several independent delegates through Pi's ordinary parallel tool calls.
-5. As a user, I can cancel the parent tool call and know the delegated process tree will be terminated.
-6. As a user, I receive a bounded timeout rather than an indefinitely running child.
-7. As a user, I receive the child's valid final answer even if an extension, watcher, or inherited subprocess prevents the child event loop or pipes from draining normally.
+3. As a parent agent, I can ask a tester to exercise a feature's real behavior and return evidence and a verdict.
+4. As a parent agent, I can hand one bounded implementation task to a worker.
+5. As a parent agent, I can launch several independent delegates through Pi's ordinary parallel tool calls.
+6. As a user, I can cancel the parent tool call and know the delegated process tree will be terminated.
+7. As a user, I receive a bounded timeout rather than an indefinitely running child.
+8. As a user, I receive the child's valid final answer even if an extension, watcher, or inherited subprocess prevents the child event loop or pipes from draining normally.
 
 ## Public interface
 
@@ -30,7 +31,7 @@ Register exactly one model-facing tool named `delegate`.
 
 ```ts
 interface DelegateInput {
-  agent: "scout" | "reviewer" | "oracle" | "worker";
+  agent: "scout" | "reviewer" | "oracle" | "tester" | "worker";
   task: string;
   model?: string;
   cwd?: string;
@@ -73,6 +74,14 @@ Rules:
 - Tools: `read`, `grep`, `find`, `ls`
 - Default deadline: 600 seconds
 - Prompt instructs it to advise, not implement
+
+### Tester
+
+- Purpose: exercise a feature's real behavior in a local, development, or test environment and report evidence
+- Default thinking: `high`
+- Tools: `read`, `grep`, `find`, `ls`, `bash`
+- Default deadline: 1,200 seconds
+- Prompt permits bounded runtime/generated state and short-lived local services, forbids source or configuration edits and production credentials/data, and requires cleanup plus a pass/fail/blocked verdict
 
 ### Worker
 
@@ -155,7 +164,7 @@ V1 intentionally excludes:
 ## Acceptance criteria
 
 1. The extension installs as a Pi package and registers `delegate`.
-2. All four profiles launch with their documented prompt, tools, effective configured or built-in thinking, and deadlines; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
+2. All five profiles launch with their documented prompt, tools, effective configured or built-in thinking, and deadlines; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
 3. Children run with no sessions, extension discovery, or skill discovery.
 4. A clean child result is streamed and returned.
 5. Parent abort terminates the full POSIX process group within a bounded grace period.

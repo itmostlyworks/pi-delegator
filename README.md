@@ -26,16 +26,16 @@ Install the current Git repository:
 pi install git:github.com/ludwigbacklund/pi-delegator
 ```
 
-Install the pinned `v0.3.1` release:
+Install the pinned `v0.4.0` release:
 
 ```bash
-pi install git:github.com/ludwigbacklund/pi-delegator@v0.3.1
+pi install git:github.com/ludwigbacklund/pi-delegator@v0.4.0
 ```
 
 After publication to npm, the equivalent command is:
 
 ```bash
-pi install npm:pi-delegator@0.3.1
+pi install npm:pi-delegator@0.4.0
 ```
 
 For local development:
@@ -65,7 +65,7 @@ The extension registers one model-facing tool:
 
 ```ts
 delegate({
-  agent: "scout" | "reviewer" | "oracle" | "worker",
+  agent: "scout" | "reviewer" | "oracle" | "tester" | "worker",
   task: "Inspect the authentication flow and identify the relevant files",
   model: "anthropic/claude-sonnet-4-5", // optional
   cwd: "/path/to/project"              // optional
@@ -81,9 +81,10 @@ The parent agent may issue independent `delegate` calls in the same turn to run 
 | `scout` | Fast codebase reconnaissance | `read`, `grep`, `find`, `ls` | `low` | 3 minutes |
 | `reviewer` | Correctness and maintainability review | `read`, `grep`, `find`, `ls`, `bash` | `high` | 10 minutes |
 | `oracle` | Challenge assumptions and advise | `read`, `grep`, `find`, `ls` | `high` | 10 minutes |
+| `tester` | Exercise real feature behavior and report evidence | `read`, `grep`, `find`, `ls`, `bash` | `high` | 20 minutes |
 | `worker` | Implement one bounded change | `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write` | `high` | 20 minutes |
 
-Only `worker` receives the dedicated `edit` and `write` tools. Reviewer receives `bash`, but its fixed role prompt restricts shell use to read-only inspection and validation; reviewer and oracle prompts explicitly forbid modifications.
+Only `worker` receives the dedicated `edit` and `write` tools. Reviewer receives `bash`, but its fixed role prompt restricts shell use to read-only inspection and validation; reviewer and oracle prompts explicitly forbid modifications. Tester may run bounded application, test, API, CLI, and installed browser-automation commands and create temporary runtime state, but it must not edit source or configuration files and must clean up its processes and test state.
 
 ### Inputs and precedence
 
@@ -106,11 +107,15 @@ Optional per-profile defaults live at `~/.pi/agent/pi-delegator.json`, or under 
   },
   "reviewer": {
     "thinking": "high"
+  },
+  "tester": {
+    "model": "openai-codex/gpt-5.6-luna",
+    "thinking": "high"
   }
 }
 ```
 
-Only the four built-in profile names and the `model` and `thinking` fields are accepted. Invalid configuration prevents the extension from starting with an actionable error. Configuration is loaded once at extension startup; start a new Pi session after editing it.
+Only the five built-in profile names and the `model` and `thinking` fields are accepted. Invalid configuration prevents the extension from starting with an actionable error. Configuration is loaded once at extension startup; start a new Pi session after editing it.
 
 Project-local delegate configuration and custom profiles are not discovered.
 
@@ -135,7 +140,7 @@ Model-visible output is bounded:
 
 ## Deliberate limitations
 
-v0.3.1 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
+v0.4.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
 
 ## Development
 

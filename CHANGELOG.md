@@ -2,6 +2,12 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.4.0] - 2026-08-29
+
+### Added
+
+- Added a fixed `tester` profile for bounded real-behavior verification with high thinking, bash-based runtime exercise, no edit/write tools, and explicit side-effect cleanup requirements.
+
 ## [0.3.1] - 2026-08-29
 
 ### Changed
@@ -34,6 +40,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.4.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.1.0...v0.2.0

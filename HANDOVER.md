@@ -24,7 +24,7 @@ Your task is to implement the documented V1 end-to-end:
 
 - initialize the TypeScript/npm Pi package;
 - register the single `delegate` tool;
-- implement the four fixed profiles;
+- implement the documented fixed profiles;
 - spawn fresh foreground Pi children with extensions, skills, and sessions disabled;
 - parse bounded JSONL output;
 - enforce profile wall-clock deadlines;
@@ -43,7 +43,8 @@ Important constraints:
 - One delegate call launches exactly one child.
 - `timeoutMs` may shorten but never lengthen the role default.
 - Scout uses low thinking and has no `bash` or write tools.
-- Worker is the only mutating role.
+- Tester may exercise bounded runtime behavior through `bash` but has no `edit` or `write` tools.
+- Worker is the only source-mutating role.
 - Use `shell: false` and explicit argument arrays.
 - Never await only the child `close` event.
 - All completion paths must pass through one idempotent finalizer.

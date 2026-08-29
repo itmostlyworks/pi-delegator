@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-export const DELEGATE_AGENT_NAMES = ["scout", "reviewer", "oracle", "worker"] as const;
+export const DELEGATE_AGENT_NAMES = ["scout", "reviewer", "oracle", "tester", "worker"] as const;
 export const DELEGATE_THINKING_LEVELS = [
   "off",
   "minimal",
@@ -76,6 +76,14 @@ export const ORACLE_PROFILE = profile(
   600_000,
 );
 
+export const TESTER_PROFILE = profile(
+  "tester",
+  "Exercise a feature's real behavior and report evidence",
+  ["read", "grep", "find", "ls", "bash"],
+  "high",
+  1_200_000,
+);
+
 export const WORKER_PROFILE = profile(
   "worker",
   "Implement one clearly bounded task",
@@ -92,6 +100,8 @@ export function getDelegateProfile(name: DelegateAgentName): DelegateProfile {
       return REVIEWER_PROFILE;
     case "oracle":
       return ORACLE_PROFILE;
+    case "tester":
+      return TESTER_PROFILE;
     case "worker":
       return WORKER_PROFILE;
     default:

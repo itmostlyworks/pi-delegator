@@ -48,12 +48,15 @@ test("loads, normalizes, and freezes per-profile model and thinking defaults", a
       JSON.stringify({
         scout: { model: " example/scout ", thinking: "medium" },
         reviewer: { thinking: "high" },
+        tester: { model: " example/tester ", thinking: "high" },
       }),
     );
     const defaults = loadDelegateDefaults(fixture.path);
     assert.equal(defaults.scout?.model, "example/scout");
     assert.equal(defaults.scout?.thinking, "medium");
     assert.equal(defaults.reviewer?.thinking, "high");
+    assert.equal(defaults.tester?.model, "example/tester");
+    assert.equal(defaults.tester?.thinking, "high");
     assert.equal(Object.isFrozen(defaults), true);
     assert.equal(Object.isFrozen(defaults.scout), true);
 

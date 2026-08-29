@@ -246,10 +246,10 @@ export default function piDelegator(pi: ExtensionAPI): void {
   pi.registerTool<typeof DelegateParameters, DelegateDetails>({
     name: "delegate",
     label: "Delegate",
-    description: "Run one bounded task with a fixed-role Scout, Reviewer, Oracle, or Worker profile in a fresh Pi subprocess; the model may be overridden, while thinking is fixed by profile configuration.",
-    promptSnippet: "Delegate one bounded reconnaissance, review, advisory, or implementation task to a fresh context",
+    description: "Run one bounded task with a fixed-role Scout, Reviewer, Oracle, Tester, or Worker profile in a fresh Pi subprocess; the model may be overridden, while thinking is fixed by profile configuration.",
+    promptSnippet: "Delegate one bounded reconnaissance, review, advisory, behavioral verification, or implementation task to a fresh context",
     promptGuidelines: [
-      "Use delegate when a focused reconnaissance, review, advisory, or implementation task benefits from a fresh bounded context.",
+      "Use delegate when a focused reconnaissance, review, advisory, behavioral verification, or implementation task benefits from a fresh bounded context.",
     ],
     parameters: DelegateParameters,
 

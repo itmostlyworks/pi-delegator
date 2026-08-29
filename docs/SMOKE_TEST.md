@@ -76,7 +76,40 @@ test "$before_status" = "$after_status"
 
 Pass conditions: the reviewer reports the subtraction bug and both `test` commands exit 0.
 
-## 4. Worker edits a disposable repository
+## 4. Tester exercises real behavior without editing source
+
+```bash
+mkdir -p "$PI_DELEGATOR_SMOKE_ROOT/tester"
+cd "$PI_DELEGATOR_SMOKE_ROOT/tester"
+git init -q
+printf '{"scripts":{"test":"node --test"},"type":"module"}\n' > package.json
+printf 'export const double = (value) => value * 2;\n' > double.js
+printf 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { double } from "./double.js";\ntest("double", () => assert.equal(double(3), 6));\n' > double.test.js
+git add package.json double.js double.test.js
+git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base
+before_head="$(git rev-parse HEAD)"
+before_status="$(git status --porcelain=v1 -z | git hash-object --stdin)"
+pi
+```
+
+Send this prompt:
+
+```text
+Call delegate exactly once with agent tester. Ask it to verify the double(value) feature by running the existing test suite and directly exercising representative positive, zero, and negative inputs. Require concrete evidence and do not modify source or configuration files. Do not test the feature yourself.
+```
+
+After Pi returns, exit it and verify:
+
+```bash
+after_head="$(git rev-parse HEAD)"
+after_status="$(git status --porcelain=v1 -z | git hash-object --stdin)"
+test "$before_head" = "$after_head"
+test "$before_status" = "$after_status"
+```
+
+Pass conditions: the tester reports a pass verdict with evidence from both the existing suite and direct behavior checks, performs no source or configuration edits, and both final `test` commands exit 0.
+
+## 5. Worker edits a disposable repository
 
 ```bash
 mkdir -p "$PI_DELEGATOR_SMOKE_ROOT/worker"
@@ -106,7 +139,7 @@ git diff --exit-code -- package.json
 
 Pass conditions: only the requested fixture files change, the new test exists, and both the worker's validation and the explicit `npm test` pass.
 
-## 5. Two sibling scouts
+## 6. Two sibling scouts
 
 From the package checkout:
 
@@ -127,7 +160,7 @@ Pass conditions:
 - each result describes only its requested file;
 - neither result or lifecycle outcome overwrites the other.
 
-## 6. Cancel an active process tree
+## 7. Cancel an active process tree
 
 Generate a unique marker, start Pi interactively, and keep the shell open for the post-cancel check:
 
@@ -155,7 +188,7 @@ fi
 
 Pass conditions: cancellation settles after bounded cleanup and the marked descendant is absent.
 
-## 7. Descendant-held-pipe cleanup fixture
+## 8. Descendant-held-pipe cleanup fixture
 
 This check uses a real parent Pi process and the repository's fixture as the delegated child. It makes no child provider call. The fixture exits after starting a descendant that inherits stdout, reproducing the pipe-drain failure mode.
 
@@ -184,7 +217,7 @@ fi
 unset PI_DELEGATOR_PI_BINARY FAKE_PI_SCENARIO FAKE_PI_DESCENDANT_PID_PATH
 ```
 
-## 8. Record the release result
+## 9. Record the release result
 
 Copy this table into the release notes or implementation report and fill every row. Do not mark v0.1.0 smoke-tested without recording actual outcomes.
 
@@ -193,6 +226,7 @@ Copy this table into the release notes or implementation report and fill every r
 | Environment and automated checks |  |  |  |
 | Scout known files |  |  |  |
 | Reviewer no-write |  |  |  |
+| Tester real-behavior verification |  |  |  |
 | Worker edit and validation |  |  |  |
 | Parallel sibling scouts |  |  |  |
 | Parent cancellation/process tree |  |  |  |

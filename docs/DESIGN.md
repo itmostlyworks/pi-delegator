@@ -30,7 +30,7 @@ There is no manager process, worker-script DSL, run registry, persistence layer,
 
 ### `src/agents.ts`
 
-- Defines the closed set of four profiles.
+- Defines the closed set of five profiles.
 - Loads packaged Markdown prompt bodies, or exports them as constants if that is materially simpler.
 - Validates internal profile configuration at extension startup.
 - Contains no user/project discovery in V1.
@@ -39,7 +39,7 @@ Suggested profile type:
 
 ```ts
 interface DelegateProfile {
-  name: "scout" | "reviewer" | "oracle" | "worker";
+  name: "scout" | "reviewer" | "oracle" | "tester" | "worker";
   description: string;
   tools: readonly string[];
   thinking: ThinkingLevel; // built-in fallback
@@ -206,6 +206,7 @@ Suggested defaults:
 
 - scout: 45 seconds
 - reviewer/oracle: 120 seconds
+- tester: 120 seconds for known-fast tools
 - worker: 120 seconds for known-fast tools
 - `bash`: bounded only by the run deadline in V1
 
@@ -281,7 +282,7 @@ V1 officially supports macOS and Linux. On `win32`, fail before spawning with a 
 - Built-in closed agent set only.
 - No project-controlled prompts in V1 beyond Pi's ordinary trusted project instructions.
 - No shell interpolation in launch construction.
-- No repository artifact writes.
+- No delegator-owned run artifacts are written to the repository. Tester commands may create bounded generated artifacts or local test state as part of exercising behavior, but must clean them up.
 - Explicit tool allowlists per role.
-- Worker is the only mutating role.
+- Worker is the only source-mutating role. Tester may create bounded temporary/generated artifacts and local test state through runtime commands, but its prompt forbids source and configuration edits and requires cleanup.
 - Output and diagnostics are bounded before entering parent model context.

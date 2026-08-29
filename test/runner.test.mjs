@@ -8,6 +8,7 @@ import {
   ORACLE_PROFILE,
   REVIEWER_PROFILE,
   SCOUT_PROFILE,
+  TESTER_PROFILE,
   WORKER_PROFILE,
 } from "../src/agents.ts";
 import { isSupportedPlatform, runDelegate } from "../src/runner.ts";
@@ -102,6 +103,7 @@ test("launches every fixed profile with isolated CLI contracts and outputs", asy
       { profile: SCOUT_PROFILE, output: "scout output" },
       { profile: REVIEWER_PROFILE, output: "reviewer output" },
       { profile: ORACLE_PROFILE, output: "oracle output" },
+      { profile: TESTER_PROFILE, output: "tester output" },
       { profile: WORKER_PROFILE, output: "worker output" },
     ];
 

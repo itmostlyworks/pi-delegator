@@ -49,7 +49,7 @@ Acceptance:
 
 Deliver:
 
-- reviewer, oracle, and worker profiles
+- reviewer, oracle, tester, and worker profiles
 - fixed role prompts/tool allowlists/default thinking/deadlines
 - compact `onUpdate` progress
 - optional caller model override; thinking and deadlines remain profile-controlled
@@ -60,6 +60,7 @@ Acceptance:
 - Each profile launches with the expected default CLI contract.
 - Valid model overrides affect only the selected call; thinking cannot be supplied by the caller.
 - Reviewer/oracle cannot mutate through built-in tools.
+- Tester receives bash for bounded behavioral verification but no edit/write tools.
 - Worker receives mutation tools.
 - Parallel calls keep outputs and lifecycle state isolated.
 
@@ -174,10 +175,11 @@ After automated tests, run against a real authenticated Pi installation:
 
 1. Scout asks for two known files and returns quickly.
 2. Reviewer inspects a small diff and does not modify files.
-3. Worker edits a disposable fixture repository and reports validation.
-4. Two scouts launch as sibling tool calls.
-5. Cancel an active delegate and verify no child process remains.
-6. Use a fixture task that starts a background process holding pipes and verify bounded cleanup.
+3. Tester exercises a disposable fixture's real CLI behavior without editing source or configuration.
+4. Worker edits a disposable fixture repository and reports validation.
+5. Two scouts launch as sibling tool calls.
+6. Cancel an active delegate and verify no child process remains.
+7. Use a fixture task that starts a background process holding pipes and verify bounded cleanup.
 
 Record exact commands and observed outcomes in the implementation report. Do not make live-provider smoke tests part of the deterministic unit suite.
 
