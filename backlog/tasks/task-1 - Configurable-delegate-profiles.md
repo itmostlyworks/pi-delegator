@@ -1,10 +1,10 @@
 ---
 id: TASK-1
 title: Configurable delegate profiles
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-29 09:29'
-updated_date: '2026-08-29 14:41'
+updated_date: '2026-08-29 14:50'
 labels: []
 dependencies: []
 ---
