@@ -2,6 +2,19 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.5.0] - 2026-08-29
+
+### Added
+
+- Added complete user-level and trusted-project delegate profiles with project → user → bundled precedence, atomic replacement, custom names, and explicit disabling.
+- Added validated explicit local skills and extensions while retaining ambient capability isolation and the model-facing tool allowlist boundary.
+- Added configurable profile descriptions, models, thinking levels, prompts, tools, capabilities, and package-bounded deadlines.
+
+### Changed
+
+- Replaced the legacy partial `{ model, thinking }` user configuration with complete profile definitions. Legacy configuration now fails early with migration guidance.
+- Made effective profile registries immutable per session and isolated project discovery from delegate-call working directories.
+
 ## [0.4.0] - 2026-08-29
 
 ### Added
@@ -40,6 +53,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.5.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.2.0...v0.3.0
