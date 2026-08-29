@@ -65,9 +65,9 @@ The extension registers one model-facing tool:
 
 ```ts
 delegate({
-  agent: "scout" | "reviewer" | "oracle" | "tester" | "worker",
+  agent: "scout", // any currently effective profile name
   task: "Inspect the authentication flow and identify the relevant files",
-  model: "anthropic/claude-sonnet-4-5", // optional
+  model: "anthropic/claude-sonnet-4-5", // optional per-call override
   cwd: "/path/to/project"              // optional
 })
 ```
@@ -91,37 +91,51 @@ Only `worker` receives the dedicated `edit` and `write` tools. Reviewer receives
 - `task` is required, must not be blank, and is limited to 32 KiB of UTF-8.
 - `cwd` defaults to the parent session directory and must be an existing directory.
 - `model` uses a Pi `provider/model` selector and is limited to 256 UTF-8 bytes.
-- Deadlines are fixed by profile and cannot be shortened or extended by the calling agent.
-- Model precedence is call override → user profile default → parent session model.
-- Thinking is not a tool input; its precedence is user profile default → built-in profile default.
+- Deadlines are fixed by the effective profile and cannot be changed by the calling agent.
+- Model precedence is call override → effective profile default → parent session model.
+- Thinking is not a tool input; it comes from the effective profile.
 
-## User defaults
+## User profiles
 
-Optional per-profile defaults live at `~/.pi/agent/pi-delegator.json`, or under the directory selected by `PI_CODING_AGENT_DIR`:
+The five bundled profiles above remain available without configuration. To add, completely replace, or disable profiles, create `~/.pi/agent/pi-delegator.json` (or the equivalent under `PI_CODING_AGENT_DIR`):
 
 ```json
 {
-  "scout": {
-    "model": "anthropic/claude-sonnet-4-5",
-    "thinking": "medium"
-  },
-  "reviewer": {
-    "thinking": "high"
-  },
-  "tester": {
-    "model": "openai-codex/gpt-5.6-luna",
-    "thinking": "high"
+  "profiles": {
+    "scout": null,
+    "reviewer": {
+      "description": "Review with our preferred model",
+      "model": "anthropic/claude-sonnet-4-5",
+      "thinking": "high",
+      "prompt": "prompts/reviewer.md",
+      "tools": ["read", "grep", "find", "ls", "bash"],
+      "skills": [],
+      "extensions": [],
+      "deadlineMs": 600000
+    },
+    "docs": {
+      "description": "Inspect and improve documentation",
+      "model": null,
+      "thinking": "medium",
+      "prompt": "prompts/docs.md",
+      "tools": ["read", "grep", "find", "ls", "edit", "write"],
+      "skills": [],
+      "extensions": [],
+      "deadlineMs": 1200000
+    }
   }
 }
 ```
 
-Only the five built-in profile names and the `model` and `thinking` fields are accepted. Invalid configuration prevents the extension from starting with an actionable error. Configuration is loaded once at extension startup; start a new Pi session after editing it.
+`null` disables a name. An object atomically replaces any bundled profile of the same name and must contain every field shown; profiles never inherit or merge fields. `model: null` inherits the parent model. Prompt paths resolve relative to the configuration file and must identify non-empty UTF-8 Markdown files. Deadlines are positive integers capped at 20 minutes. `delegate` cannot appear in `tools`.
 
-Project-local delegate configuration and custom profiles are not discovered.
+In this release, `skills` and `extensions` are required but must remain empty. Configuration is validated and loaded once at extension startup; invalid or legacy partial configuration prevents delegation with an actionable source/profile diagnostic. Start a new Pi session after editing it.
+
+Project-local delegate configuration is not discovered.
 
 ### TUI output
 
-Delegate results show the selected profile, model selector, thinking level, and duration above the returned text. The model reflects call, user-default, and parent-session precedence; thinking reflects user-default and built-in precedence. Pi may still resolve a fuzzy model selector or clamp thinking to the selected model's capabilities. The collapsed view uses the model ID and bounds the output preview by both lines and text length; expand the tool result to see the full provider/model selector and complete returned text.
+Delegate results show the selected profile, model selector, thinking level, and duration above the returned text. The model reflects call, effective-profile, and parent-session precedence; thinking comes from the effective profile. Pi may still resolve a fuzzy model selector or clamp thinking to the selected model's capabilities. The collapsed view uses the model ID and bounds the output preview by both lines and text length; expand the tool result to see the full provider/model selector and complete returned text.
 
 This metadata is display-only. The model-visible tool result remains the delegate's bounded response text.
 

@@ -22,6 +22,7 @@ function registeredTool(config) {
   try {
     process.env.PI_CODING_AGENT_DIR = agentDirectory;
     if (config !== undefined) {
+      writeFileSync(join(agentDirectory, "configured.md"), "Configured role prompt\n");
       writeFileSync(join(agentDirectory, DELEGATE_CONFIG_FILENAME), JSON.stringify(config));
     }
     piDelegator({
@@ -43,6 +44,20 @@ const context = (cwd) => ({
   model: { provider: "example", id: "model" },
 });
 
+function configuredProfile(overrides = {}) {
+  return {
+    description: "Configured profile",
+    model: "configured/default",
+    thinking: "minimal",
+    prompt: "configured.md",
+    tools: ["read", "custom_tool"],
+    skills: [],
+    extensions: [],
+    deadlineMs: 1_000,
+    ...overrides,
+  };
+}
+
 const plainTheme = {
   fg: (_color, text) => text,
   bold: (text) => text,
@@ -61,7 +76,8 @@ test("registers exactly the delegate tool with a closed five-profile schema", ()
   assert.equal(Object.hasOwn(tool.parameters.properties, "thinking"), false);
   assert.equal(Object.hasOwn(tool.parameters.properties, "timeoutMs"), false);
   assert.equal(tool.parameters.properties.model.maxLength, MAX_MODEL_BYTES);
-  assert.match(tool.parameters.properties.model.description, /user's profile default.*parent session model/);
+  assert.match(tool.parameters.properties.agent.description, /scout: Fast local codebase reconnaissance/);
+  assert.match(tool.parameters.properties.model.description, /selected profile.*parent session model/);
 });
 
 test("renders selected delegate model and thinking metadata without changing result content", () => {
@@ -184,10 +200,10 @@ test("rejects blank and oversized UTF-8 tasks before launch", async () => {
   );
 });
 
-test("rejects invalid user configuration during extension startup", () => {
+test("rejects legacy user configuration during extension startup with corrective action", () => {
   assert.throws(
-    () => registeredTool({ scout: { tools: ["bash"] } }),
-    /Invalid pi-delegator config.*unknown field "tools".*profile "scout"/,
+    () => registeredTool({ scout: { model: "old/model" } }),
+    /Invalid pi-delegator config.*legacy or incomplete format.*Corrective action/,
   );
 });
 
@@ -277,23 +293,36 @@ test("applies a model override while preserving profile thinking and streams com
   }
 });
 
-test("applies immutable user defaults with model-only call precedence", async () => {
+test("advertises and launches the immutable effective registry with isolated model overrides", async () => {
   const tool = registeredTool({
-    scout: { model: "configured/scout" },
-    reviewer: { model: "configured/reviewer", thinking: "minimal" },
-    oracle: { thinking: "medium" },
+    profiles: {
+      scout: null,
+      reviewer: configuredProfile({ description: "Replacement reviewer" }),
+      custom: configuredProfile({ description: "Custom verifier", model: null, thinking: "medium", tools: ["read"] }),
+      short: configuredProfile({ description: "Short deadline", deadlineMs: 40 }),
+    },
   });
+  assert.deepEqual(tool.parameters.properties.agent.enum, ["reviewer", "oracle", "tester", "worker", "custom", "short"]);
+  assert.match(tool.parameters.properties.agent.description, /reviewer: Replacement reviewer/);
+  assert.match(tool.parameters.properties.agent.description, /custom: Custom verifier/);
+  assert.doesNotMatch(tool.parameters.properties.agent.description, /scout:/);
+
   const fixture = resolve("test/fixtures/fake-pi.mjs");
-  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-user-defaults-"));
+  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-effective-profiles-"));
   await chmod(fixture, 0o755);
   const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
   const previousScenario = process.env.FAKE_PI_SCENARIO;
   const previousRecordPath = process.env.FAKE_PI_RECORD_PATH;
+  const previousOutput = process.env.FAKE_PI_OUTPUT;
+  const previousPromptContentPath = process.env.FAKE_PI_PROMPT_CONTENT_PATH;
+  const previousDelayMs = process.env.FAKE_PI_DELAY_MS;
   process.env.PI_DELEGATOR_PI_BINARY = fixture;
   process.env.FAKE_PI_SCENARIO = "clean";
   try {
     const configuredPath = join(directory, "configured.json");
+    const promptPath = join(directory, "prompt.md");
     process.env.FAKE_PI_RECORD_PATH = configuredPath;
+    process.env.FAKE_PI_PROMPT_CONTENT_PATH = promptPath;
     const configured = await tool.execute(
       "configured",
       { agent: "reviewer", task: "Review" },
@@ -301,66 +330,35 @@ test("applies immutable user defaults with model-only call precedence", async ()
       undefined,
       context(directory),
     );
-    assert.equal(configured.details.model, "configured/reviewer");
+    assert.equal(configured.details.model, "configured/default");
     assert.equal(configured.details.thinking, "minimal");
     const configuredArgs = JSON.parse(await readFile(configuredPath, "utf8"));
-    assert.equal(configuredArgs[configuredArgs.indexOf("--model") + 1], "configured/reviewer");
+    assert.equal(configuredArgs[configuredArgs.indexOf("--model") + 1], "configured/default");
     assert.equal(configuredArgs[configuredArgs.indexOf("--thinking") + 1], "minimal");
-    assert.equal(configuredArgs[configuredArgs.indexOf("--tools") + 1], REVIEWER_PROFILE.tools.join(","));
+    assert.equal(configuredArgs[configuredArgs.indexOf("--tools") + 1], "read,custom_tool");
+    assert.equal(await readFile(promptPath, "utf8"), "Configured role prompt\n");
 
-    const overridePath = join(directory, "override.json");
-    process.env.FAKE_PI_RECORD_PATH = overridePath;
-    const overridden = await tool.execute(
-      "overridden",
-      { agent: "reviewer", task: "Review", model: "call/model" },
-      undefined,
-      undefined,
-      context(directory),
-    );
+    delete process.env.FAKE_PI_RECORD_PATH;
+    delete process.env.FAKE_PI_PROMPT_CONTENT_PATH;
+    const [overridden, concurrentDefault] = await Promise.all([
+      tool.execute("override", { agent: "reviewer", task: "Review", model: "call/model" }, undefined, undefined, context(directory)),
+      tool.execute("default", { agent: "reviewer", task: "Review" }, undefined, undefined, context(directory)),
+    ]);
     assert.equal(overridden.details.model, "call/model");
-    assert.equal(overridden.details.thinking, "minimal");
+    assert.equal(concurrentDefault.details.model, "configured/default");
+    const later = await tool.execute("later", { agent: "reviewer", task: "Review" }, undefined, undefined, context(directory));
+    assert.equal(later.details.model, "configured/default");
 
-    const unchangedPath = join(directory, "unchanged.json");
-    process.env.FAKE_PI_RECORD_PATH = unchangedPath;
-    const unchanged = await tool.execute(
-      "unchanged",
-      { agent: "reviewer", task: "Review again" },
-      undefined,
-      undefined,
-      context(directory),
-    );
-    assert.equal(unchanged.details.model, "configured/reviewer");
-    assert.equal(unchanged.details.thinking, "minimal");
-
-    const modelOnly = await tool.execute(
-      "model-only",
-      { agent: "scout", task: "Inspect" },
-      undefined,
-      undefined,
-      context(directory),
-    );
-    assert.equal(modelOnly.details.model, "configured/scout");
-    assert.equal(modelOnly.details.thinking, "low");
-
-    const configuredThinking = await tool.execute(
-      "configured-thinking",
-      { agent: "oracle", task: "Advise" },
-      undefined,
-      undefined,
-      context(directory),
-    );
-    assert.equal(configuredThinking.details.model, "example/model");
-    assert.equal(configuredThinking.details.thinking, "medium");
-
-    const inherited = await tool.execute(
-      "inherited",
-      { agent: "worker", task: "Implement" },
-      undefined,
-      undefined,
-      context(directory),
-    );
+    const inherited = await tool.execute("custom", { agent: "custom", task: "Verify" }, undefined, undefined, context(directory));
     assert.equal(inherited.details.model, "example/model");
-    assert.equal(inherited.details.thinking, "high");
+    assert.equal(inherited.details.thinking, "medium");
+
+    process.env.FAKE_PI_SCENARIO = "delayed-clean";
+    process.env.FAKE_PI_DELAY_MS = "100";
+    await assert.rejects(
+      tool.execute("short", { agent: "short", task: "Wait" }, undefined, undefined, context(directory)),
+      /\[run_timeout\].*40 ms/,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
     if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
@@ -369,6 +367,12 @@ test("applies immutable user defaults with model-only call precedence", async ()
     else process.env.FAKE_PI_SCENARIO = previousScenario;
     if (previousRecordPath === undefined) delete process.env.FAKE_PI_RECORD_PATH;
     else process.env.FAKE_PI_RECORD_PATH = previousRecordPath;
+    if (previousOutput === undefined) delete process.env.FAKE_PI_OUTPUT;
+    else process.env.FAKE_PI_OUTPUT = previousOutput;
+    if (previousPromptContentPath === undefined) delete process.env.FAKE_PI_PROMPT_CONTENT_PATH;
+    else process.env.FAKE_PI_PROMPT_CONTENT_PATH = previousPromptContentPath;
+    if (previousDelayMs === undefined) delete process.env.FAKE_PI_DELAY_MS;
+    else process.env.FAKE_PI_DELAY_MS = previousDelayMs;
   }
 });
 

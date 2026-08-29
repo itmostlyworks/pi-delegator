@@ -7,13 +7,13 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import {
-  DELEGATE_AGENT_NAMES,
   getDelegateProfile,
   type DelegateProfile,
+  type DelegateProfileRegistry,
   type DelegateThinkingLevel,
 } from "./agents.ts";
 import {
-  loadDelegateDefaults,
+  loadDelegateProfiles,
   MAX_MODEL_BYTES,
   normalizeModelSelector,
 } from "./config.ts";
@@ -33,32 +33,40 @@ const MAX_RECENT_PROGRESS_TOOLS = 6;
 const MAX_COLLAPSED_RESULT_LINES = 10;
 const MAX_COLLAPSED_RESULT_CODEPOINTS = 1_000;
 
-const DelegateParameters = Type.Object(
-  {
-    agent: StringEnum(DELEGATE_AGENT_NAMES, {
-      description: "Built-in delegate profile to invoke",
-    }),
-    task: Type.String({
-      description: "Focused task for the delegate",
-      minLength: 1,
-      maxLength: MAX_TASK_BYTES,
-    }),
-    model: Type.Optional(
-      Type.String({
-        description: "Pi model selector; defaults to the user's profile default, then the parent session model",
-        minLength: 1,
-        maxLength: MAX_MODEL_BYTES,
+function createDelegateParameters(profiles: DelegateProfileRegistry) {
+  const names = Object.keys(profiles);
+  const descriptions = names
+    .map((name) => `${name}: ${profiles[name]!.description}`)
+    .join("; ");
+  return Type.Object(
+    {
+      agent: StringEnum(names, {
+        description: descriptions.length === 0
+          ? "No delegate profiles are currently enabled"
+          : `Effective delegate profile to invoke. ${descriptions}`,
       }),
-    ),
-    cwd: Type.Optional(
-      Type.String({
-        description: "Existing working directory; defaults to the parent Pi cwd",
+      task: Type.String({
+        description: "Focused task for the delegate",
         minLength: 1,
+        maxLength: MAX_TASK_BYTES,
       }),
-    ),
-  },
-  { additionalProperties: false },
-);
+      model: Type.Optional(
+        Type.String({
+          description: "Pi model selector; defaults to the selected profile, then the parent session model",
+          minLength: 1,
+          maxLength: MAX_MODEL_BYTES,
+        }),
+      ),
+      cwd: Type.Optional(
+        Type.String({
+          description: "Existing working directory; defaults to the parent Pi cwd",
+          minLength: 1,
+        }),
+      ),
+    },
+    { additionalProperties: false },
+  );
+}
 
 export interface DelegateDetails {
   readonly agent: DelegateProfile["name"];
@@ -241,12 +249,18 @@ async function resolveWorkingDirectory(requested: string | undefined, parentCwd:
 }
 
 export default function piDelegator(pi: ExtensionAPI): void {
-  const configuredDefaults = loadDelegateDefaults();
+  const profiles = loadDelegateProfiles();
+  const DelegateParameters = createDelegateParameters(profiles);
+  const profileSummary = Object.values(profiles)
+    .map((profile) => `${profile.name} (${profile.description})`)
+    .join(", ");
 
   pi.registerTool<typeof DelegateParameters, DelegateDetails>({
     name: "delegate",
     label: "Delegate",
-    description: "Run one bounded task with a fixed-role Scout, Reviewer, Oracle, Tester, or Worker profile in a fresh Pi subprocess; the model may be overridden, while thinking is fixed by profile configuration.",
+    description: profileSummary.length === 0
+      ? "No delegate profiles are currently enabled."
+      : `Run one bounded task in a fresh Pi subprocess using an effective profile: ${profileSummary}. The model may be overridden per call.`,
     promptSnippet: "Delegate one bounded reconnaissance, review, advisory, behavioral verification, or implementation task to a fresh context",
     promptGuidelines: [
       "Use delegate when a focused reconnaissance, review, advisory, behavioral verification, or implementation task benefits from a fresh bounded context.",
@@ -263,14 +277,13 @@ export default function piDelegator(pi: ExtensionAPI): void {
         params.model === undefined
           ? undefined
           : normalizeModelSelector(params.model, "Delegate model");
-      const profile = getDelegateProfile(params.agent);
-      const profileDefaults = configuredDefaults[profile.name];
+      const profile = getDelegateProfile(params.agent, profiles);
       const cwd = await resolveWorkingDirectory(params.cwd, ctx.cwd);
       const model =
         requestedModel ??
-        profileDefaults?.model ??
+        profile.model ??
         (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
-      const thinking = profileDefaults?.thinking ?? profile.thinking;
+      const thinking = profile.thinking;
       const startedAt = Date.now();
       const toolProgress: ToolProgressSummary = { totalCalls: 0, recentTools: [] };
       const result = await runDelegate({

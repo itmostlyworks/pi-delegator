@@ -7,7 +7,7 @@
 ```text
 parent Pi
   └─ delegate tool
-      ├─ resolve fixed agent profile
+      ├─ resolve one immutable effective profile
       ├─ build explicit child CLI arguments
       ├─ spawn fresh Pi process in its own POSIX process group
       ├─ parse bounded JSONL events
@@ -23,27 +23,37 @@ There is no manager process, worker-script DSL, run registry, persistence layer,
 
 - Registers the `delegate` tool with TypeBox.
 - Validates input and cwd.
-- Resolves the selected profile.
-- Calls `runDelegate` with Pi's tool `AbortSignal` and `onUpdate` callback.
+- Loads the bounded user source once and resolves the immutable effective registry.
+- Generates the `agent` schema and descriptions from that registry.
+- Resolves the selected profile and calls `runDelegate` with Pi's tool `AbortSignal` and `onUpdate` callback.
 - Converts the runner outcome into a Pi tool result.
 - Keeps rendering minimal; default rendering is acceptable for V1.
 
 ### `src/agents.ts`
 
-- Defines the closed set of five profiles.
-- Loads packaged Markdown prompt bodies, or exports them as constants if that is materially simpler.
-- Validates internal profile configuration at extension startup.
-- Contains no user/project discovery in V1.
+- Defines the five immutable bundled profiles.
+- Loads packaged Markdown prompt bodies and exports the bundled registry.
+- Provides the normalized internal profile type shared by bundled and configured profiles.
+
+### `src/config.ts`
+
+- Reads a bounded user source from the Pi agent directory once at extension startup.
+- Validates complete profile replacements, disables, prompt files, tools, thinking, models, and bounded deadlines.
+- Resolves user entries over bundled profiles without inheritance or field merging.
+- Returns a deeply immutable effective registry; project discovery remains outside this slice.
 
 Suggested profile type:
 
 ```ts
 interface DelegateProfile {
-  name: "scout" | "reviewer" | "oracle" | "tester" | "worker";
+  name: string;
   description: string;
+  model: string | null;
   tools: readonly string[];
-  thinking: ThinkingLevel; // built-in fallback
-  timeoutMs: number; // per-call maximum
+  skills: readonly string[];
+  extensions: readonly string[];
+  thinking: ThinkingLevel;
+  timeoutMs: number; // normalized configured deadline
   systemPrompt: string;
 }
 ```
@@ -95,8 +105,8 @@ pi \
 Requirements:
 
 - Resolve the current Pi executable robustly. Permit a private test override such as `PI_DELEGATOR_PI_BINARY`.
-- Use the caller's bounded model selector when supplied; otherwise use the active parent model.
-- Do not expose thinking to the caller; use the selected profile's user-configured level when present, otherwise its built-in default.
+- Use the caller's bounded model selector when supplied; otherwise use the effective profile model when non-null, then the active parent model.
+- Do not expose thinking to the caller; use the selected effective profile's level.
 - Use an argument array and `shell: false`.
 - Spawn in the requested cwd.
 - Set `detached: true` on POSIX so the child owns a process group.
@@ -279,8 +289,8 @@ V1 officially supports macOS and Linux. On `win32`, fail before spawning with a 
 
 ## Security
 
-- Built-in closed agent set only.
-- No project-controlled prompts in V1 beyond Pi's ordinary trusted project instructions.
+- Effective names and complete profiles come only from bundled definitions plus the bounded user source in this slice.
+- No project-controlled profile prompts in this slice beyond Pi's ordinary trusted project instructions.
 - No shell interpolation in launch construction.
 - No delegator-owned run artifacts are written to the repository. Tester commands may create bounded generated artifacts or local test state as part of exercising behavior, but must clean them up.
 - Explicit tool allowlists per role.

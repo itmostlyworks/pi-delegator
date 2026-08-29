@@ -64,27 +64,26 @@ Acceptance:
 - Worker receives mutation tools.
 - Parallel calls keep outputs and lifecycle state isolated.
 
-## Stage 4: user-level model and thinking defaults
+## Stage 4: user-level effective profiles
 
 Deliver:
 
-- optional user-level configuration at the Pi agent directory (for example `~/.pi/agent/pi-delegator.json`)
-- per-profile `model` and `thinking` defaults only
-- model precedence: call override → user-level config → inherited parent model
-- thinking precedence: user-level config → built-in profile thinking
-- strict bounded validation with actionable startup errors
-- tests proving independent calls do not mutate loaded defaults
+- optional bounded user-level configuration at the Pi agent directory
+- a `profiles` map whose entries add or completely replace profiles, or disable names with `null`
+- complete definitions for description, model, thinking, prompt, tools, empty capability arrays, and bounded deadline
+- model precedence: call override → effective profile → inherited parent model
+- strict validation with source/profile/corrective startup diagnostics
+- tests proving the loaded registry and independent calls remain immutable
 
 Acceptance:
 
-- With no config file, behavior is unchanged.
-- Configured model/thinking defaults apply to the named profile.
-- Per-call model fields override configured model defaults; thinking cannot be overridden per call.
-- Unknown profiles, fields, and thinking levels are rejected precisely.
-- Configuration cannot change prompts, tools, deadlines, or lifecycle behavior.
-- Project-local configuration is not discovered or honored.
+- With no config file, bundled behavior is unchanged.
+- Complete user profiles add, replace, and disable names reflected in the tool schema.
+- Per-call model fields override only one invocation; thinking and deadlines cannot be overridden per call.
+- Legacy, incomplete, malformed, and unsafe configuration fails before delegation.
+- Project-local configuration is not discovered or honored in this slice.
 
-Keep the configuration immutable after extension startup. Do not add project-controlled profiles, generic prompt/tool overrides, dynamic reload, or a broader agent discovery mechanism.
+Keep the effective registry immutable after extension startup. Explicit non-empty skill/extension loading, project profiles, generic per-call overrides, and dynamic reload remain separate work.
 
 ## Stage 5: package polish
 
@@ -162,8 +161,9 @@ If implemented in V1:
 
 ### Profiles and concurrency
 
-- each profile emits expected inherited model/default thinking/tools arguments
-- call model overrides replace model defaults for only that call; thinking and deadline overrides are absent from the tool schema
+- each bundled or configured profile emits its expected model/thinking/tools/prompt arguments
+- effective names and descriptions appear in the tool schema after add/replace/disable resolution
+- call model overrides replace profile defaults for only that call, including concurrent calls; thinking and deadline overrides are absent from the tool schema
 - invalid or oversized model overrides are rejected
 - the tool schema exposes no caller deadline override
 - two concurrent delegate calls return their own output

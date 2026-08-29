@@ -31,7 +31,7 @@ Register exactly one model-facing tool named `delegate`.
 
 ```ts
 interface DelegateInput {
-  agent: "scout" | "reviewer" | "oracle" | "tester" | "worker";
+  agent: string; // constrained by the tool schema to an effective profile name
   task: string;
   model?: string;
   cwd?: string;
@@ -43,11 +43,11 @@ Rules:
 - Exactly one child per call.
 - `task` must be non-empty and bounded in size.
 - `cwd` defaults to the parent context's cwd and must resolve to an existing directory.
-- `model`, when supplied, is a bounded Pi model selector passed to the child; otherwise the selected profile's user-configured model is used when present, then the parent model.
-- Thinking is not exposed to the calling agent. The selected profile uses the user's configured thinking level when present, otherwise its built-in default; Pi may clamp it to the selected model's capabilities.
-- The selected profile's deadline is fixed and is not exposed to the calling agent.
-- Unknown fields and agent names are rejected by the schema.
-- V1 has no generic prompt or tool override fields. Profiles continue to own role authority and tool access.
+- `model`, when supplied, is a bounded Pi model selector passed to the child; otherwise the effective profile's model is used when non-null, then the parent model.
+- Thinking is not exposed to the calling agent. It comes from the effective profile; Pi may clamp it to the selected model's capabilities.
+- The effective profile's bounded deadline is fixed and is not exposed to the calling agent.
+- Unknown fields and names outside the immutable effective registry are rejected by the schema.
+- There are no generic per-call prompt or tool override fields. Profiles continue to own role authority and tool access.
 
 ## Built-in delegates
 
@@ -91,7 +91,13 @@ Rules:
 - Default deadline: 1,200 seconds
 - Prompt requires a concise change and validation report
 
-Models are omitted from built-in profile defaults, so the child uses the caller's model, then a user-configured profile model, then the parent model. Profile thinking levels may be overridden only through user-level configuration, not by the calling agent. Role prompts, tool allowlists, and deadlines remain fixed; callers cannot guess a shorter deadline that discards useful delegate work.
+Bundled profile models are null, so the child inherits the parent model unless the call supplies an override. User configuration may add, atomically replace, or disable complete profiles. Complete definitions own model, thinking, role prompt, tool allowlist, and bounded deadline; callers can override only the model for one invocation.
+
+## User profile configuration
+
+The bounded user document at the Pi agent directory's `pi-delegator.json` contains a `profiles` map. Each name maps to `null`, which disables it, or a complete definition containing `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, `extensions`, and `deadlineMs`. Definitions replace whole profiles; there is no inheritance or field merging. Prompt paths resolve relative to the source document and identify non-empty Markdown files. In the first profile-management slice, `skills` and `extensions` are required empty arrays.
+
+Configuration is immutable after extension startup. Invalid, incomplete, legacy, or unsafe sources prevent registration and identify the source, affected profile, and corrective action. Profile deadlines remain below a package-controlled hard ceiling, tool lists cannot enable nested `delegate` calls, and project configuration is not loaded in this slice.
 
 ## Progress behavior
 
@@ -154,7 +160,7 @@ V1 intentionally excludes:
 - child-to-parent questions
 - nested subagents
 - agent creation or management UI
-- project-controlled agent definitions
+- untrusted project-controlled agent definitions
 - automatic worktrees
 - external CLI/job providers
 - acceptance policy, mutation proofs, and host gates
@@ -164,7 +170,7 @@ V1 intentionally excludes:
 ## Acceptance criteria
 
 1. The extension installs as a Pi package and registers `delegate`.
-2. All five profiles launch with their documented prompt, tools, effective configured or built-in thinking, and deadlines; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
+2. With no configuration, all five bundled profiles launch unchanged. User configuration can add, replace, or disable complete profiles; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
 3. Children run with no sessions, extension discovery, or skill discovery.
 4. A clean child result is streamed and returned.
 5. Parent abort terminates the full POSIX process group within a bounded grace period.
