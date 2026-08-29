@@ -95,7 +95,7 @@ Only `worker` receives the dedicated `edit` and `write` tools. Reviewer receives
 - Model precedence is call override → effective profile default → parent session model.
 - Thinking is not a tool input; it comes from the effective profile.
 
-## User profiles
+## Profile configuration
 
 The five bundled profiles above remain available without configuration. To add, completely replace, or disable profiles, create `~/.pi/agent/pi-delegator.json` (or the equivalent under `PI_CODING_AGENT_DIR`):
 
@@ -129,9 +129,9 @@ The five bundled profiles above remain available without configuration. To add, 
 
 `null` disables a name. An object atomically replaces any bundled profile of the same name and must contain every field shown; profiles never inherit or merge fields. `model: null` inherits the parent model. Prompt and capability paths resolve relative to the configuration file. `skills` accepts explicit local Markdown skill files or skill directories; `extensions` accepts explicit local JavaScript or TypeScript extension files. Remote package sources are not supported. Deadlines are positive integers capped at 20 minutes. `delegate` cannot appear in `tools`, and `extensions` cannot load pi-delegator itself.
 
-Configuration is validated and loaded once at extension startup. Missing, unreadable, unsupported, or duplicate capability paths and invalid or legacy partial configuration prevent delegation with an actionable source/profile diagnostic. Start a new Pi session after editing it.
+Configuration is validated and loaded once per session. Missing, unreadable, unsupported, or duplicate capability paths and invalid or legacy partial configuration prevent delegation with an actionable source/profile diagnostic. Start a new Pi session after editing it.
 
-Project-local delegate configuration is not discovered.
+Trusted projects may provide the same complete document at `.pi/pi-delegator.json`. Project entries take precedence over user entries, including `null` disables; untrusted project configuration is ignored. Project discovery is fixed to the parent session directory and trust context—a delegate call's `cwd` cannot select another configuration source.
 
 ### TUI output
 
@@ -154,7 +154,7 @@ Model-visible output is bounded:
 
 ## Deliberate limitations
 
-v0.4.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, project-defined profiles, worktrees, provider fallback, durable registries, or Windows support.
+v0.4.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, worktrees, provider fallback, durable registries, or Windows support.
 
 ## Development
 

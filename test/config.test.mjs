@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   DELEGATE_CONFIG_FILENAME,
   getDelegateConfigPath,
+  getProjectDelegateConfigPath,
   loadDelegateProfiles,
   MAX_CONFIG_BYTES,
   MAX_MODEL_BYTES,
@@ -113,6 +114,48 @@ test("adds, completely replaces, disables, normalizes, and freezes user profiles
     }
   } finally {
     await fixture.cleanup();
+  }
+});
+
+test("resolves project profiles over user and bundled profiles without merging entries", async () => {
+  const user = await temporaryConfig();
+  const project = await temporaryConfig();
+  try {
+    await writeFile(
+      user.path,
+      JSON.stringify({
+        profiles: {
+          reviewer: completeProfile({ description: "User reviewer", tools: ["read"] }),
+          user_only: completeProfile({ description: "User only" }),
+        },
+      }),
+    );
+    await writeFile(
+      project.path,
+      JSON.stringify({
+        profiles: {
+          scout: null,
+          reviewer: completeProfile({ description: "Project reviewer", model: null, thinking: "high", tools: ["bash"] }),
+          project_only: completeProfile({ description: "Project only" }),
+        },
+      }),
+    );
+
+    const userProfiles = loadDelegateProfiles(user.path);
+    const profiles = loadDelegateProfiles(project.path, userProfiles);
+    assert.equal(Object.hasOwn(profiles, "scout"), false);
+    assert.equal(profiles.reviewer.description, "Project reviewer");
+    assert.equal(profiles.reviewer.model, null);
+    assert.equal(profiles.reviewer.thinking, "high");
+    assert.deepEqual(profiles.reviewer.tools, ["bash"]);
+    assert.equal(profiles.reviewer.systemPrompt, "Custom role prompt\n");
+    assert.equal(profiles.user_only.description, "User only");
+    assert.equal(profiles.project_only.description, "Project only");
+    assert.equal(Object.isFrozen(profiles), true);
+    assert.equal(getProjectDelegateConfigPath("/tmp/example"), join("/tmp/example", ".pi", DELEGATE_CONFIG_FILENAME));
+  } finally {
+    await user.cleanup();
+    await project.cleanup();
   }
 });
 

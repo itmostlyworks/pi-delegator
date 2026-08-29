@@ -13,6 +13,7 @@ import {
   type DelegateThinkingLevel,
 } from "./agents.ts";
 import {
+  getProjectDelegateConfigPath,
   loadDelegateProfiles,
   MAX_MODEL_BYTES,
   normalizeModelSelector,
@@ -248,8 +249,7 @@ async function resolveWorkingDirectory(requested: string | undefined, parentCwd:
   return cwd;
 }
 
-export default function piDelegator(pi: ExtensionAPI): void {
-  const profiles = loadDelegateProfiles();
+function registerDelegateTool(pi: ExtensionAPI, profiles: DelegateProfileRegistry): void {
   const DelegateParameters = createDelegateParameters(profiles);
   const profileSummary = Object.values(profiles)
     .map((profile) => `${profile.name} (${profile.description})`)
@@ -325,5 +325,16 @@ export default function piDelegator(pi: ExtensionAPI): void {
         : formatRenderedResult(result.content, details, expanded, theme);
       return new Text(text, 0, 0);
     },
+  });
+}
+
+export default function piDelegator(pi: ExtensionAPI): void {
+  const userProfiles = loadDelegateProfiles();
+
+  pi.on("session_start", (_event, ctx) => {
+    const profiles = ctx.isProjectTrusted()
+      ? loadDelegateProfiles(getProjectDelegateConfigPath(ctx.cwd), userProfiles)
+      : userProfiles;
+    registerDelegateTool(pi, profiles);
   });
 }

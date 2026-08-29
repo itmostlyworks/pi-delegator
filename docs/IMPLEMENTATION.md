@@ -73,7 +73,9 @@ Deliver:
 - complete definitions for description, model, thinking, prompt, tools, explicit local capability arrays, and bounded deadline
 - model precedence: call override → effective profile → inherited parent model
 - strict validation with source/profile/corrective startup diagnostics
-- tests proving the loaded registry and independent calls remain immutable
+- trusted project-level configuration with project → user → bundled precedence
+- session-scoped resolution that ignores untrusted projects and delegate-call working directories
+- tests proving loaded registries and independent calls/sessions remain immutable
 
 Acceptance:
 
@@ -81,9 +83,10 @@ Acceptance:
 - Complete user profiles add, replace, and disable names reflected in the tool schema.
 - Per-call model fields override only one invocation; thinking and deadlines cannot be overridden per call.
 - Legacy, incomplete, malformed, and unsafe configuration fails before delegation.
-- Project-local configuration is not discovered or honored in this slice.
+- Trusted project configuration can add, replace, and disable profiles; untrusted project configuration is ignored.
+- Delegate-call working directories cannot select profile configuration, and different project sessions retain independent registries.
 
-Keep the effective registry immutable after extension startup. Validate and canonicalize explicit local skill/extension paths before launch while retaining ambient discovery isolation. Project profiles, generic per-call overrides, and dynamic reload remain separate work.
+Keep each effective registry immutable after session startup. Validate and canonicalize explicit local skill/extension paths before launch while retaining ambient discovery isolation. Generic per-call overrides and dynamic in-session reload remain separate work.
 
 ## Stage 5: package polish
 

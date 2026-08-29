@@ -11,7 +11,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import {
   BUNDLED_PROFILES,
@@ -73,6 +73,10 @@ export function normalizeModelSelector(value: unknown, label: string): string {
 
 export function getDelegateConfigPath(): string {
   return join(getAgentDir(), DELEGATE_CONFIG_FILENAME);
+}
+
+export function getProjectDelegateConfigPath(parentCwd: string): string {
+  return join(resolve(parentCwd), CONFIG_DIR_NAME, DELEGATE_CONFIG_FILENAME);
 }
 
 function readBoundedFile(path: string, maximumBytes: number): Buffer {
@@ -336,12 +340,15 @@ function parseProfile(path: string, profileName: string, value: unknown): Delega
   });
 }
 
-export function loadDelegateProfiles(path = getDelegateConfigPath()): DelegateProfileRegistry {
+export function loadDelegateProfiles(
+  path = getDelegateConfigPath(),
+  lowerPrecedenceProfiles: DelegateProfileRegistry = BUNDLED_PROFILES,
+): DelegateProfileRegistry {
   let bytes: Buffer;
   try {
     bytes = readBoundedFile(path, MAX_CONFIG_BYTES);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return BUNDLED_PROFILES;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return lowerPrecedenceProfiles;
     const reason = error instanceof Error ? error.message : String(error);
     throw configError(path, `file could not be read: ${reason}. Corrective action: provide a readable regular JSON file or remove it`);
   }
@@ -365,7 +372,7 @@ export function loadDelegateProfiles(path = getDelegateConfigPath()): DelegatePr
     throw configError(path, '"profiles" must be an object. Corrective action: map each profile name to null or a complete profile definition');
   }
 
-  const effective: Record<string, DelegateProfile> = { ...BUNDLED_PROFILES };
+  const effective: Record<string, DelegateProfile> = { ...lowerPrecedenceProfiles };
   for (const [profileName, value] of Object.entries(parsed.profiles)) {
     validateProfileName(path, profileName);
     if (value === null) delete effective[profileName];

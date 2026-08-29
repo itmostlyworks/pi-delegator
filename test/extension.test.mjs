@@ -15,10 +15,11 @@ import {
 import { DELEGATE_CONFIG_FILENAME } from "../src/config.ts";
 import piDelegator, { MAX_MODEL_BYTES, MAX_TASK_BYTES } from "../src/index.ts";
 
-function registeredTool(config) {
+function registeredTool(config, session = {}) {
   const agentDirectory = mkdtempSync(join(tmpdir(), "pi-delegator-agent-dir-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   let tool;
+  let sessionStart;
   try {
     process.env.PI_CODING_AGENT_DIR = agentDirectory;
     if (config !== undefined) {
@@ -29,7 +30,12 @@ function registeredTool(config) {
       registerTool(definition) {
         tool = definition;
       },
+      on(eventName, handler) {
+        if (eventName === "session_start") sessionStart = handler;
+      },
     });
+    assert.ok(sessionStart);
+    sessionStart({}, context(session.cwd ?? agentDirectory, session.trusted ?? false));
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -39,9 +45,10 @@ function registeredTool(config) {
   return tool;
 }
 
-const context = (cwd) => ({
+const context = (cwd, trusted = false) => ({
   cwd,
   model: { provider: "example", id: "model" },
+  isProjectTrusted: () => trusted,
 });
 
 function configuredProfile(overrides = {}) {
@@ -376,37 +383,120 @@ test("advertises and launches the immutable effective registry with isolated mod
   }
 });
 
-test("does not discover project-local delegator config", async () => {
-  const tool = registeredTool();
-  const fixture = resolve("test/fixtures/fake-pi.mjs");
-  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-project-config-"));
+test("trusted parent project profiles add, replace, and disable over user and bundled profiles", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-trusted-project-"));
   const projectConfigDirectory = join(directory, ".pi");
+  await mkdir(projectConfigDirectory);
+  await writeFile(join(projectConfigDirectory, "configured.md"), "Project role prompt\n");
+  await writeFile(
+    join(projectConfigDirectory, DELEGATE_CONFIG_FILENAME),
+    JSON.stringify({
+      profiles: {
+        scout: null,
+        reviewer: configuredProfile({ description: "Project reviewer", model: null, thinking: "high", tools: ["bash"] }),
+        project_only: configuredProfile({ description: "Project only", tools: ["read"] }),
+      },
+    }),
+  );
+  try {
+    const tool = registeredTool(
+      { profiles: { reviewer: configuredProfile({ description: "User reviewer" }), user_only: configuredProfile() } },
+      { cwd: directory, trusted: true },
+    );
+    assert.deepEqual(tool.parameters.properties.agent.enum, ["reviewer", "oracle", "tester", "worker", "user_only", "project_only"]);
+    assert.match(tool.parameters.properties.agent.description, /reviewer: Project reviewer/);
+    assert.match(tool.parameters.properties.agent.description, /project_only: Project only/);
+    assert.doesNotMatch(tool.parameters.properties.agent.description, /scout:/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("untrusted project config cannot influence the schema or delegated child behavior", async () => {
+  const fixture = resolve("test/fixtures/fake-pi.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-untrusted-project-"));
+  const projectConfigDirectory = join(directory, ".pi");
+  const recordPath = join(directory, "args.json");
   await mkdir(projectConfigDirectory);
   await writeFile(
     join(projectConfigDirectory, DELEGATE_CONFIG_FILENAME),
-    JSON.stringify({ scout: { tools: ["bash"] } }),
+    JSON.stringify({ profiles: { scout: null, hostile: configuredProfile({ tools: ["bash"] }) } }),
   );
   await chmod(fixture, 0o755);
   const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
   const previousScenario = process.env.FAKE_PI_SCENARIO;
+  const previousRecordPath = process.env.FAKE_PI_RECORD_PATH;
   process.env.PI_DELEGATOR_PI_BINARY = fixture;
   process.env.FAKE_PI_SCENARIO = "clean";
+  process.env.FAKE_PI_RECORD_PATH = recordPath;
   try {
-    const result = await tool.execute(
-      "id",
-      { agent: "scout", task: "Inspect", cwd: directory },
-      undefined,
-      undefined,
-      context(directory),
-    );
-    assert.equal(result.details.model, "example/model");
+    const tool = registeredTool(undefined, { cwd: directory, trusted: false });
+    assert.deepEqual(tool.parameters.properties.agent.enum, ["scout", "reviewer", "oracle", "tester", "worker"]);
+    const result = await tool.execute("id", { agent: "scout", task: "Inspect" }, undefined, undefined, context(directory));
     assert.equal(result.details.thinking, "low");
+    const args = JSON.parse(await readFile(recordPath, "utf8"));
+    assert.equal(args[args.indexOf("--tools") + 1], "read,grep,find,ls");
   } finally {
     await rm(directory, { recursive: true, force: true });
     if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
     else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
     if (previousScenario === undefined) delete process.env.FAKE_PI_SCENARIO;
     else process.env.FAKE_PI_SCENARIO = previousScenario;
+    if (previousRecordPath === undefined) delete process.env.FAKE_PI_RECORD_PATH;
+    else process.env.FAKE_PI_RECORD_PATH = previousRecordPath;
+  }
+});
+
+test("delegate cwd cannot select profiles outside the trusted parent session", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "pi-delegator-parent-project-"));
+  const child = await mkdtemp(join(tmpdir(), "pi-delegator-child-cwd-"));
+  for (const [directory, profileName] of [[parent, "parent_only"], [child, "cwd_only"]]) {
+    const configDirectory = join(directory, ".pi");
+    await mkdir(configDirectory);
+    await writeFile(join(configDirectory, "configured.md"), `${profileName} prompt\n`);
+    await writeFile(
+      join(configDirectory, DELEGATE_CONFIG_FILENAME),
+      JSON.stringify({ profiles: { [profileName]: configuredProfile({ description: profileName, tools: ["read"] }) } }),
+    );
+  }
+  try {
+    const tool = registeredTool(undefined, { cwd: parent, trusted: true });
+    assert.equal(tool.parameters.properties.agent.enum.includes("parent_only"), true);
+    assert.equal(tool.parameters.properties.agent.enum.includes("cwd_only"), false);
+    await assert.rejects(
+      tool.execute("id", { agent: "cwd_only", task: "Inspect", cwd: child }, undefined, undefined, context(parent, true)),
+      /Unknown delegate agent/,
+    );
+    assert.equal(tool.parameters.properties.agent.enum.includes("cwd_only"), false);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+    await rm(child, { recursive: true, force: true });
+  }
+});
+
+test("different trusted project sessions keep independent effective profile registries", async () => {
+  const projectA = await mkdtemp(join(tmpdir(), "pi-delegator-project-a-"));
+  const projectB = await mkdtemp(join(tmpdir(), "pi-delegator-project-b-"));
+  for (const [directory, profileName] of [[projectA, "project_a"], [projectB, "project_b"]]) {
+    const configDirectory = join(directory, ".pi");
+    await mkdir(configDirectory);
+    await writeFile(join(configDirectory, "configured.md"), `${profileName} prompt\n`);
+    await writeFile(
+      join(configDirectory, DELEGATE_CONFIG_FILENAME),
+      JSON.stringify({ profiles: { [profileName]: configuredProfile({ description: profileName }) } }),
+    );
+  }
+  try {
+    const toolA = registeredTool(undefined, { cwd: projectA, trusted: true });
+    const toolB = registeredTool(undefined, { cwd: projectB, trusted: true });
+    assert.equal(toolA.parameters.properties.agent.enum.includes("project_a"), true);
+    assert.equal(toolA.parameters.properties.agent.enum.includes("project_b"), false);
+    assert.equal(toolB.parameters.properties.agent.enum.includes("project_b"), true);
+    assert.equal(toolB.parameters.properties.agent.enum.includes("project_a"), false);
+    assert.equal(toolA.parameters.properties.agent.enum.includes("project_a"), true);
+  } finally {
+    await rm(projectA, { recursive: true, force: true });
+    await rm(projectB, { recursive: true, force: true });
   }
 });
 

@@ -23,7 +23,8 @@ There is no manager process, worker-script DSL, run registry, persistence layer,
 
 - Registers the `delegate` tool with TypeBox.
 - Validates input and cwd.
-- Loads the bounded user source once and resolves the immutable effective registry.
+- Loads the bounded user source once, then resolves a session-scoped immutable registry after project trust is known.
+- Loads `.pi/pi-delegator.json` only from a trusted parent session cwd, with project → user → bundled precedence.
 - Generates the `agent` schema and descriptions from that registry.
 - Resolves the selected profile and calls `runDelegate` with Pi's tool `AbortSignal` and `onUpdate` callback.
 - Converts the runner outcome into a Pi tool result.
@@ -37,10 +38,10 @@ There is no manager process, worker-script DSL, run registry, persistence layer,
 
 ### `src/config.ts`
 
-- Reads a bounded user source from the Pi agent directory once at extension startup.
+- Reads bounded user and trusted-project sources once per session.
 - Validates complete profile replacements, disables, prompt files, tools, thinking, models, and bounded deadlines.
-- Resolves user entries over bundled profiles without inheritance or field merging.
-- Returns a deeply immutable effective registry; project discovery remains outside this slice.
+- Resolves project entries over user and bundled profiles without inheritance or field merging.
+- Returns a deeply immutable effective registry; delegate-call working directories never affect discovery.
 
 Suggested profile type:
 
@@ -292,8 +293,8 @@ V1 officially supports macOS and Linux. On `win32`, fail before spawning with a 
 
 ## Security
 
-- Effective names and complete profiles come only from bundled definitions plus the bounded user source in this slice.
-- No project-controlled profile prompts in this slice beyond Pi's ordinary trusted project instructions.
+- Effective names and complete profiles come only from bundled definitions, the bounded user source, and the trusted parent project's bounded source.
+- Project-controlled profile prompts are loaded only after `ctx.isProjectTrusted()` succeeds; delegate-call working directories cannot select profile sources.
 - No shell interpolation in launch construction.
 - No delegator-owned run artifacts are written to the repository. Tester commands may create bounded generated artifacts or local test state as part of exercising behavior, but must clean them up.
 - Explicit tool allowlists per role.
