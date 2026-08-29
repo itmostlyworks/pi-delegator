@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -383,21 +383,44 @@ test("advertises and launches the immutable effective registry with isolated mod
   }
 });
 
-test("trusted parent project profiles add, replace, and disable over user and bundled profiles", async () => {
+test("trusted parent project profiles add, replace, disable, and launch explicit capabilities over user and bundled profiles", async () => {
+  const fixture = resolve("test/fixtures/fake-pi.mjs");
   const directory = await mkdtemp(join(tmpdir(), "pi-delegator-trusted-project-"));
   const projectConfigDirectory = join(directory, ".pi");
+  const skillPath = join(projectConfigDirectory, "project-skill.md");
+  const extensionPath = join(projectConfigDirectory, "project-extension.mjs");
+  const recordPath = join(directory, "project-args.json");
+  const promptContentPath = join(directory, "project-prompt.md");
+  await chmod(fixture, 0o755);
   await mkdir(projectConfigDirectory);
   await writeFile(join(projectConfigDirectory, "configured.md"), "Project role prompt\n");
+  await writeFile(skillPath, "# Project skill\n");
+  await writeFile(extensionPath, "export default function projectExtension() {}\n");
   await writeFile(
     join(projectConfigDirectory, DELEGATE_CONFIG_FILENAME),
     JSON.stringify({
       profiles: {
         scout: null,
-        reviewer: configuredProfile({ description: "Project reviewer", model: null, thinking: "high", tools: ["bash"] }),
+        reviewer: configuredProfile({
+          description: "Project reviewer",
+          model: null,
+          thinking: "high",
+          tools: ["bash", "project_tool"],
+          skills: ["project-skill.md"],
+          extensions: ["project-extension.mjs"],
+        }),
         project_only: configuredProfile({ description: "Project only", tools: ["read"] }),
       },
     }),
   );
+  const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
+  const previousScenario = process.env.FAKE_PI_SCENARIO;
+  const previousRecordPath = process.env.FAKE_PI_RECORD_PATH;
+  const previousPromptContentPath = process.env.FAKE_PI_PROMPT_CONTENT_PATH;
+  process.env.PI_DELEGATOR_PI_BINARY = fixture;
+  process.env.FAKE_PI_SCENARIO = "clean";
+  process.env.FAKE_PI_RECORD_PATH = recordPath;
+  process.env.FAKE_PI_PROMPT_CONTENT_PATH = promptContentPath;
   try {
     const tool = registeredTool(
       { profiles: { reviewer: configuredProfile({ description: "User reviewer" }), user_only: configuredProfile() } },
@@ -407,8 +430,27 @@ test("trusted parent project profiles add, replace, and disable over user and bu
     assert.match(tool.parameters.properties.agent.description, /reviewer: Project reviewer/);
     assert.match(tool.parameters.properties.agent.description, /project_only: Project only/);
     assert.doesNotMatch(tool.parameters.properties.agent.description, /scout:/);
+
+    const result = await tool.execute("project", { agent: "reviewer", task: "Review" }, undefined, undefined, context(directory, true));
+    assert.equal(result.details.model, "example/model");
+    assert.equal(result.details.thinking, "high");
+    const args = JSON.parse(await readFile(recordPath, "utf8"));
+    assert.equal(args[args.indexOf("--model") + 1], "example/model");
+    assert.equal(args[args.indexOf("--thinking") + 1], "high");
+    assert.equal(args[args.indexOf("--tools") + 1], "bash,project_tool");
+    assert.equal(args[args.indexOf("--skill") + 1], await realpath(skillPath));
+    assert.equal(args[args.indexOf("--extension") + 1], await realpath(extensionPath));
+    assert.equal(await readFile(promptContentPath, "utf8"), "Project role prompt\n");
   } finally {
     await rm(directory, { recursive: true, force: true });
+    if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
+    else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
+    if (previousScenario === undefined) delete process.env.FAKE_PI_SCENARIO;
+    else process.env.FAKE_PI_SCENARIO = previousScenario;
+    if (previousRecordPath === undefined) delete process.env.FAKE_PI_RECORD_PATH;
+    else process.env.FAKE_PI_RECORD_PATH = previousRecordPath;
+    if (previousPromptContentPath === undefined) delete process.env.FAKE_PI_PROMPT_CONTENT_PATH;
+    else process.env.FAKE_PI_PROMPT_CONTENT_PATH = previousPromptContentPath;
   }
 });
 

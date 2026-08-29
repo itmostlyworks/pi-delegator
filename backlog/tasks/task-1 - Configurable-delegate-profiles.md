@@ -4,7 +4,7 @@ title: Configurable delegate profiles
 status: To Do
 assignee: []
 created_date: '2026-08-29 09:29'
-updated_date: '2026-08-29 09:40'
+updated_date: '2026-08-29 14:41'
 labels: []
 dependencies: []
 ---
@@ -96,3 +96,17 @@ A public release needs to support different user environments and workflows with
 - Per-call prompt, tools, skills, extensions, thinking, or deadline overrides.
 - Static auditing of arbitrary third-party extension implementation behavior.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## QA
+
+Verdict: pass
+
+### Checked
+- Full integrated typecheck and 52-test suite passed, covering bundled/user/project profile resolution, complete replacement and disabling, explicit capability isolation, immutable concurrent calls, trust gating, delegate-cwd isolation, and independent project sessions.
+- Invalid, legacy, incomplete, unsafe, duplicate, missing, and unsupported configuration paths fail before launch with bounded diagnostics.
+- Existing launch and lifecycle isolation remained green, including ambient discovery disabling, bounded deadlines, cancellation, process-tree cleanup, protocol/output limits, and race handling.
+- Security review of the assembled `333a554..HEAD` diff found no exploitable injection, trust-boundary, path-loading, nested-delegation, secret, SSRF, or resource-bound vulnerability. Low-severity hardening observations were carried into reflective triage.
+<!-- SECTION:NOTES:END -->

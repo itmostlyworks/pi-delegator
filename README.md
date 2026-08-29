@@ -141,7 +141,7 @@ This metadata is display-only. The model-visible tool result remains the delegat
 
 ## Lifecycle and limits
 
-Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables ambient extension and skill discovery; only the selected profile's explicit local capabilities are added back. This prevents recursive delegation and ambient child behavior. It still receives Pi's normal coding prompt and trusted project instructions.
+Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables ambient extension and skill discovery; only the selected profile's explicit local capabilities are added back. This prevents ambient child behavior and direct reloading of pi-delegator through configured tools or extension paths. Explicit extensions remain trusted executable code and may launch their own subprocesses. The child still receives Pi's normal coding prompt and trusted project instructions.
 
 The runner enforces a hard wall-clock deadline and propagates parent cancellation to the entire process group using bounded TERM → KILL cleanup. It does not wait exclusively for stdio to close, so descendants holding pipes open cannot leave the tool pending indefinitely. A validated terminal answer remains successful if forced post-answer cleanup is required, and cleanup details are returned with the tool result.
 

@@ -291,7 +291,6 @@ function registerDelegateTool(pi: ExtensionAPI, profiles: DelegateProfileRegistr
         task: params.task,
         cwd,
         ...(model === undefined ? {} : { model }),
-        thinking,
         ...(signal === undefined ? {} : { signal }),
         ...(onUpdate === undefined
           ? {}

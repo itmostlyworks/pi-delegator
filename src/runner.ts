@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import type { DelegateProfile, DelegateThinkingLevel } from "./agents.ts";
+import type { DelegateProfile } from "./agents.ts";
 import { createProcessTreeController, type ProcessTreeController } from "./process-tree.ts";
 import {
   ProtocolLineTooLargeError,
@@ -92,8 +92,6 @@ export interface RunDelegateOptions {
   readonly task: string;
   readonly cwd: string;
   readonly model?: string;
-  /** Effective thinking level resolved from user configuration or the built-in profile. */
-  readonly thinking?: DelegateThinkingLevel;
   /** Private deadline override for deterministic lifecycle tests. Not exposed by the delegate tool. */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
@@ -337,7 +335,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
   if (options.model) childArgs.push("--model", options.model);
   childArgs.push(
     "--thinking",
-    options.thinking ?? options.profile.thinking,
+    options.profile.thinking,
     "--tools",
     options.profile.tools.join(","),
     "--append-system-prompt",
