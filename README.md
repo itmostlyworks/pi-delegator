@@ -26,16 +26,16 @@ Install the current Git repository:
 pi install git:github.com/itmostlyworks/pi-delegator
 ```
 
-Install the pinned `v0.5.0` release:
+Install the pinned `v0.5.1` release:
 
 ```bash
-pi install git:github.com/itmostlyworks/pi-delegator@v0.5.0
+pi install git:github.com/itmostlyworks/pi-delegator@v0.5.1
 ```
 
 After publication to npm, the equivalent command is:
 
 ```bash
-pi install npm:@mostlyworks/pi-delegator@0.5.0
+pi install npm:@mostlyworks/pi-delegator@0.5.1
 ```
 
 For local development:
@@ -154,7 +154,7 @@ Model-visible output is bounded:
 
 ## Deliberate limitations
 
-v0.5.0 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, worktrees, provider fallback, durable registries, or Windows support.
+v0.5.1 does not provide background runs, resume or fork, chains, retries, workflow DSLs, inter-agent communication, nested delegation, worktrees, provider fallback, durable registries, or Windows support.
 
 ## Development
 

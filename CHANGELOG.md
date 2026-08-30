@@ -2,11 +2,16 @@
 
 All notable changes to `pi-delegator` are documented here.
 
-## Unreleased
+## [0.5.1] - 2026-08-30
 
 ### Fixed
 
+- Final responses truncated at the 50 KiB output limit now include explicit truncation metadata and the original byte size.
 - Oversized tool-result JSONL events are now drained and discarded within the existing 1 MiB pending-line bound, allowing later terminal answers to survive large browser, image, or command results.
+
+### Changed
+
+- Moved the npm package to `@mostlyworks/pi-delegator` and the repository to the `itmostlyworks` GitHub organization.
 
 ## [0.5.0] - 2026-08-29
 
@@ -59,6 +64,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.5.1]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/itmostlyworks/pi-delegator/compare/v0.3.0...v0.3.1
