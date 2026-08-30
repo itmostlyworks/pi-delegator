@@ -23,25 +23,25 @@ Pi packages execute with full system access. Review this package before installi
 Install the current Git repository:
 
 ```bash
-pi install git:github.com/ludwigbacklund/pi-delegator
+pi install git:github.com/itmostlyworks/pi-delegator
 ```
 
 Install the pinned `v0.5.0` release:
 
 ```bash
-pi install git:github.com/ludwigbacklund/pi-delegator@v0.5.0
+pi install git:github.com/itmostlyworks/pi-delegator@v0.5.0
 ```
 
 After publication to npm, the equivalent command is:
 
 ```bash
-pi install npm:pi-delegator@0.5.0
+pi install npm:@mostlyworks/pi-delegator@0.5.0
 ```
 
 For local development:
 
 ```bash
-git clone https://github.com/ludwigbacklund/pi-delegator.git
+git clone https://github.com/itmostlyworks/pi-delegator.git
 cd pi-delegator
 npm install
 pi install "$PWD"
@@ -50,7 +50,7 @@ pi install "$PWD"
 Start a new Pi session after installation. Remove the package with the matching source, for example:
 
 ```bash
-pi remove git:github.com/ludwigbacklund/pi-delegator
+pi remove git:github.com/itmostlyworks/pi-delegator
 ```
 
 ## Usage

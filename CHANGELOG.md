@@ -59,9 +59,9 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
-[0.5.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/ludwigbacklund/pi-delegator/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/ludwigbacklund/pi-delegator/releases/tag/v0.1.0
+[0.5.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/itmostlyworks/pi-delegator/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/itmostlyworks/pi-delegator/releases/tag/v0.1.0
