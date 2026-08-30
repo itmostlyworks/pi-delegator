@@ -154,6 +154,22 @@ function truncateUtf8(text: string, maxBytes: number): { text: string; truncated
   return { text: "", truncated: true, originalBytes: bytes.length };
 }
 
+function truncateFinalText(
+  text: string,
+): { text: string; truncated: boolean; originalBytes?: number } {
+  const originalBytes = Buffer.byteLength(text, "utf8");
+  if (originalBytes <= MAX_FINAL_TEXT_BYTES) return { text, truncated: false };
+
+  const marker = `\n\n[Delegate output truncated; original response was ${originalBytes} bytes.]`;
+  const prefixLimit = Math.max(0, MAX_FINAL_TEXT_BYTES - Buffer.byteLength(marker, "utf8"));
+  const prefix = truncateUtf8(text, prefixLimit).text;
+  return {
+    text: `${prefix}${marker}`,
+    truncated: true,
+    originalBytes,
+  };
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -442,7 +458,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
         };
       }
       if (parser.state.finalText !== undefined) {
-        const final = truncateUtf8(parser.state.finalText, MAX_FINAL_TEXT_BYTES);
+        const final = truncateFinalText(parser.state.finalText);
         return {
           ok: true,
           text: final.text,

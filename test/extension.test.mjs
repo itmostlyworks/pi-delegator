@@ -300,6 +300,45 @@ test("applies a model override while preserving profile thinking and streams com
   }
 });
 
+test("returns an explicit truncation marker in model-facing tool content", async () => {
+  const tool = registeredTool();
+  const fixture = resolve("test/fixtures/fake-pi.mjs");
+  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-model-visible-truncation-"));
+  await chmod(fixture, 0o755);
+  const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
+  const previousScenario = process.env.FAKE_PI_SCENARIO;
+  const previousOutput = process.env.FAKE_PI_OUTPUT;
+  process.env.PI_DELEGATOR_PI_BINARY = fixture;
+  process.env.FAKE_PI_SCENARIO = "clean";
+  process.env.FAKE_PI_OUTPUT = "😀".repeat(13_000);
+  try {
+    const result = await tool.execute(
+      "truncated",
+      { agent: "scout", task: "Return a large answer" },
+      undefined,
+      undefined,
+      context(directory),
+    );
+
+    assert.equal(result.details.truncated, true);
+    assert.equal(result.details.originalBytes, 52_000);
+    assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);
+    assert.match(
+      result.content[0].text,
+      /\[Delegate output truncated; original response was 52000 bytes\.\]$/,
+    );
+    assert.doesNotMatch(result.content[0].text, /�/u);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
+    else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
+    if (previousScenario === undefined) delete process.env.FAKE_PI_SCENARIO;
+    else process.env.FAKE_PI_SCENARIO = previousScenario;
+    if (previousOutput === undefined) delete process.env.FAKE_PI_OUTPUT;
+    else process.env.FAKE_PI_OUTPUT = previousOutput;
+  }
+});
+
 test("advertises and launches the immutable effective registry with isolated model overrides", async () => {
   const tool = registeredTool({
     profiles: {

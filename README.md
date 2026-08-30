@@ -173,6 +173,7 @@ The automated tests use a fake Pi executable and make no provider calls. Run the
 - [`docs/DESIGN.md`](docs/DESIGN.md) — architecture and lifecycle contract
 - [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) — staged implementation and lifecycle matrix
 - [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md) — manual real-Pi release checks
+- [`docs/SMOKE_TEST_RESULTS.md`](docs/SMOKE_TEST_RESULTS.md) — recorded release-candidate smoke runs
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
 
 ## License

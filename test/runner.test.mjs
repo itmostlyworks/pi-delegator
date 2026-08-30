@@ -480,6 +480,41 @@ test("truncates returned terminal text at 50 KiB with metadata", async () => {
     assert.equal(result.truncated, true);
     assert.equal(result.originalBytes, Buffer.byteLength(output));
     assert.ok(Buffer.byteLength(result.text) <= 50 * 1024);
+    assert.match(
+      result.text,
+      /\[Delegate output truncated; original response was 60000 bytes\.\]$/,
+    );
+    assert.doesNotMatch(result.text, /�/u);
+  });
+});
+
+test("preserves the exact final-text boundary and safely truncates four-byte UTF-8", async () => {
+  await withTempDir(async (cwd) => {
+    for (const [output, expectedTruncated] of [
+      ["x".repeat(50 * 1024), false],
+      ["😀".repeat(13_000), true],
+    ]) {
+      const result = await runDelegate({
+        profile: SCOUT_PROFILE,
+        task: "Boundary answer",
+        cwd,
+        env: fixtureEnv("clean", { FAKE_PI_OUTPUT: output }),
+        cleanupGraceMs: 50,
+        exitDrainMs: 20,
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.truncated, expectedTruncated);
+      assert.ok(Buffer.byteLength(result.text) <= 50 * 1024);
+      assert.doesNotMatch(result.text, /�/u);
+      if (expectedTruncated) {
+        assert.equal(result.originalBytes, Buffer.byteLength(output));
+        assert.match(result.text, /\[Delegate output truncated; original response was 52000 bytes\.\]$/);
+      } else {
+        assert.equal(result.text, output);
+        assert.equal(result.originalBytes, undefined);
+      }
+    }
   });
 });
 
