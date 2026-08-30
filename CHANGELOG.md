@@ -2,6 +2,12 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.5.3] - 2026-08-30
+
+### Changed
+
+- Reworked the README around the public npm release with package links, npm-first installation, update and removal commands, a shorter quick start, and version-neutral release guidance.
+
 ## [0.5.2] - 2026-08-30
 
 ### Fixed
@@ -71,6 +77,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.5.3]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.4.0...v0.5.0

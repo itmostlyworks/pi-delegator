@@ -2,11 +2,18 @@
 
 A small, reliability-first delegation extension for [Pi](https://github.com/earendil-works/pi-mono).
 
+[Pi package page](https://pi.dev/packages/@mostlyworks/pi-delegator) · [npm](https://www.npmjs.com/package/@mostlyworks/pi-delegator) · [Source](https://github.com/itmostlyworks/pi-delegator)
+
 `pi-delegator` gives the parent agent one narrow capability: run one bounded task in a fresh Pi subprocess and return its result. It is deliberately not a workflow engine, scheduler, mission manager, or persistent agent fleet.
+
+- Five focused profiles: scout, reviewer, oracle, tester, and worker
+- Hard deadlines, parent cancellation, and bounded process-tree cleanup
+- Fresh child sessions with ambient extension and skill discovery disabled
+- Bounded model-visible output and stderr diagnostics
 
 ## Status
 
-The current implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls.
+`pi-delegator` is publicly available on npm. Its deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls. See the [changelog](CHANGELOG.md) for release history.
 
 ## Requirements
 
@@ -18,7 +25,24 @@ Windows is rejected before launch because equivalent process-tree termination is
 
 ## Installation
 
-Pi packages execute with full system access. Review this package before installing it.
+Pi packages execute with full system access. Review the [source](https://github.com/itmostlyworks/pi-delegator) before installing it.
+
+Install the latest release from npm:
+
+```bash
+pi install npm:@mostlyworks/pi-delegator
+```
+
+Start a new Pi session after installation. To update or remove the package later:
+
+```bash
+pi update npm:@mostlyworks/pi-delegator
+pi remove npm:@mostlyworks/pi-delegator
+```
+
+Version-pinned npm installs are supported by appending `@<version>` to the package name. General package updates intentionally skip pinned versions.
+
+### Install from Git
 
 Install the current Git repository:
 
@@ -26,19 +50,7 @@ Install the current Git repository:
 pi install git:github.com/itmostlyworks/pi-delegator
 ```
 
-Install the pinned `v0.5.2` release:
-
-```bash
-pi install git:github.com/itmostlyworks/pi-delegator@v0.5.2
-```
-
-After publication to npm, the equivalent command is:
-
-```bash
-pi install npm:@mostlyworks/pi-delegator@0.5.2
-```
-
-For local development:
+Append `@<tag>` to pin a Git release. For local development:
 
 ```bash
 git clone https://github.com/itmostlyworks/pi-delegator.git
@@ -47,13 +59,7 @@ npm install
 pi install "$PWD"
 ```
 
-Start a new Pi session after installation. Remove the package with the matching source, for example:
-
-```bash
-pi remove git:github.com/itmostlyworks/pi-delegator
-```
-
-## Usage
+## Quick start
 
 Ask Pi to delegate a focused task:
 
@@ -154,7 +160,7 @@ Model-visible output is bounded:
 
 ## Deliberate limitations
 
-v0.5.2 does not provide background runs, resume or fork, chains, package-orchestrated whole-run retries, workflow DSLs, inter-agent communication, nested delegation, worktrees, provider fallback, durable registries, or Windows support.
+`pi-delegator` intentionally does not provide background runs, resume or fork, chains, package-orchestrated whole-run retries, workflow DSLs, inter-agent communication, nested delegation, worktrees, provider fallback, durable registries, or Windows support.
 
 ## Development
 
