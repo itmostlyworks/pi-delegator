@@ -6,7 +6,7 @@ A small, reliability-first delegation extension for [Pi](https://github.com/eare
 
 ## Status
 
-The current implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls. Live-provider checks remain a manual release step; see [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md).
+The current implementation is complete. The deterministic test suite covers launch, protocol parsing, cancellation, timeouts, process-tree cleanup, profile isolation, configuration, and concurrent calls.
 
 ## Requirements
 
@@ -165,7 +165,7 @@ npm test
 npm pack --dry-run
 ```
 
-The automated tests use a fake Pi executable and make no provider calls. Run the [manual smoke test](docs/SMOKE_TEST.md) separately before a release.
+The automated tests use a fake Pi executable and make no provider calls.
 
 ## Documentation
 
@@ -173,7 +173,6 @@ The automated tests use a fake Pi executable and make no provider calls. Run the
 - [`docs/DESIGN.md`](docs/DESIGN.md) — architecture and lifecycle contract
 - [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) — staged implementation and lifecycle matrix
 - [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md) — manual real-Pi release checks
-- [`docs/SMOKE_TEST_RESULTS.md`](docs/SMOKE_TEST_RESULTS.md) — recorded release-candidate smoke runs
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
 
 ## License

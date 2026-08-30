@@ -219,7 +219,7 @@ unset PI_DELEGATOR_PI_BINARY FAKE_PI_SCENARIO FAKE_PI_DESCENDANT_PID_PATH
 
 ## 9. Record the release result
 
-Copy this table into the release notes or implementation report and fill every row. Do not mark a release smoke-tested without recording actual outcomes. See [`SMOKE_TEST_RESULTS.md`](SMOKE_TEST_RESULTS.md) for recorded release-candidate runs.
+Copy this table into the release notes or implementation report and fill every row. Do not mark a release smoke-tested without recording actual outcomes.
 
 | Check | Exact command/session | Observed outcome | Pass? |
 | --- | --- | --- | --- |
