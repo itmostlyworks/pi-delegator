@@ -61,6 +61,87 @@ function nonnegativeNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+function stringTokenEnd(text: string, start: number): number | undefined {
+  let escaped = false;
+  for (let index = start + 1; index < text.length; index += 1) {
+    const character = text[index];
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === "\"") return index + 1;
+  }
+  return undefined;
+}
+
+function tokenValue(text: string, start: number, end: number): string | undefined {
+  try {
+    const value: unknown = JSON.parse(text.slice(start, end));
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function afterPropertyColon(text: string, start: number): number | undefined {
+  let index = start;
+  while (/\s/u.test(text[index] ?? "")) index += 1;
+  return text[index] === ":" ? index + 1 : undefined;
+}
+
+function directPropertyValueStart(text: string, objectStart: number, property: string): number | undefined {
+  let depth = 0;
+  for (let index = objectStart; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+    if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return undefined;
+      continue;
+    }
+    if (character !== "\"") continue;
+
+    const end = stringTokenEnd(text, index);
+    if (end === undefined) return undefined;
+    if (depth === 1 && tokenValue(text, index, end) === property) {
+      const valueStart = afterPropertyColon(text, end);
+      if (valueStart !== undefined) {
+        let nonWhitespace = valueStart;
+        while (/\s/u.test(text[nonWhitespace] ?? "")) nonWhitespace += 1;
+        return nonWhitespace;
+      }
+    }
+    index = end - 1;
+  }
+  return undefined;
+}
+
+function directStringProperty(text: string, objectStart: number, property: string): string | undefined {
+  const valueStart = directPropertyValueStart(text, objectStart, property);
+  if (valueStart === undefined || text[valueStart] !== "\"") return undefined;
+  const end = stringTokenEnd(text, valueStart);
+  return end === undefined ? undefined : tokenValue(text, valueStart, end);
+}
+
+function isDiscardableOversizedLine(prefix: Buffer): boolean {
+  const text = prefix.toString("utf8");
+  const objectStart = text.search(/\S/u);
+  if (objectStart < 0 || text[objectStart] !== "{") return false;
+
+  const type = directStringProperty(text, objectStart, "type");
+  if (type === undefined || type === "agent_settled") return false;
+  if (type !== "message_end") return true;
+
+  // Tool results can contain large text or base64 images. They do not carry
+  // assistant completion/error authority, so retaining them would only waste
+  // bounded parser memory. Assistant messages remain strict because they may
+  // contain the terminal answer.
+  const messageStart = directPropertyValueStart(text, objectStart, "message");
+  return messageStart !== undefined && text[messageStart] === "{"
+    && directStringProperty(text, messageStart, "role") === "toolResult";
+}
+
 function aggregateUsage(current: UsageSummary, message: Record<string, unknown>): UsageSummary {
   const usage = asRecord(message.usage);
   if (!usage) return { ...current, turns: current.turns + 1 };
@@ -98,6 +179,7 @@ export class ProtocolParser {
   readonly #onAssistantMessage: ((text: string | undefined) => void) | undefined;
   readonly #onToolStart: ((toolName: string) => void) | undefined;
   #pending = Buffer.alloc(0);
+  #discardingOversizedLine = false;
 
   constructor(options: ProtocolParserOptions = {}) {
     this.#maxPendingBytes = options.maxPendingBytes ?? MAX_PENDING_JSONL_BYTES;
@@ -109,27 +191,46 @@ export class ProtocolParser {
     let start = 0;
     while (start < chunk.length) {
       const newline = chunk.indexOf(NEWLINE, start);
+      if (this.#discardingOversizedLine) {
+        if (newline === -1) return;
+        this.#discardingOversizedLine = false;
+        start = newline + 1;
+        continue;
+      }
       if (newline === -1) {
         this.#append(chunk.subarray(start));
         return;
       }
 
       this.#append(chunk.subarray(start, newline));
-      this.#processPendingLine();
+      if (this.#discardingOversizedLine) this.#discardingOversizedLine = false;
+      else this.#processPendingLine();
       start = newline + 1;
     }
   }
 
   finish(): void {
+    if (this.#discardingOversizedLine) return;
     if (this.#pending.length > 0) this.#processPendingLine();
   }
 
   #append(segment: Buffer): void {
-    if (this.#pending.length + segment.length > this.#maxPendingBytes) {
+    if (segment.length === 0) return;
+    const available = this.#maxPendingBytes - this.#pending.length;
+    if (segment.length <= available) {
+      this.#pending = this.#pending.length === 0 ? Buffer.from(segment) : Buffer.concat([this.#pending, segment]);
+      return;
+    }
+
+    const boundedPrefix = segment.subarray(0, available);
+    const candidate = this.#pending.length === 0
+      ? Buffer.from(boundedPrefix)
+      : Buffer.concat([this.#pending, boundedPrefix]);
+    if (!isDiscardableOversizedLine(candidate)) {
       throw new ProtocolLineTooLargeError(this.#maxPendingBytes);
     }
-    if (segment.length === 0) return;
-    this.#pending = this.#pending.length === 0 ? Buffer.from(segment) : Buffer.concat([this.#pending, segment]);
+    this.#pending = Buffer.alloc(0);
+    this.#discardingOversizedLine = true;
   }
 
   #processPendingLine(): void {

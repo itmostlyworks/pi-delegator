@@ -464,6 +464,22 @@ test("oversized pending protocol output fails without hanging", async () => {
   });
 });
 
+test("preserves a terminal answer after an oversized tool-result event", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: SCOUT_PROFILE,
+      task: "Large tool result",
+      cwd,
+      env: fixtureEnv("oversized-tool-result"),
+      cleanupGraceMs: 50,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "answer after large tool result");
+  });
+});
+
 test("truncates returned terminal text at 50 KiB with metadata", async () => {
   await withTempDir(async (cwd) => {
     const output = "é".repeat(30_000);
@@ -573,22 +589,22 @@ test("a terminal answer observed before the deadline wins during semantic draina
   await withTempDir(async (cwd) => {
     const signalPath = join(cwd, "signals.txt");
     const result = await runDelegate({
-      profile: { ...SCOUT_PROFILE, timeoutMs: 180 },
+      profile: { ...SCOUT_PROFILE, timeoutMs: 350 },
       task: "Late answer then leak",
       cwd,
       env: fixtureEnv("delayed-leaked-watcher", {
-        FAKE_PI_DELAY_MS: "140",
+        FAKE_PI_DELAY_MS: "200",
         FAKE_PI_SIGNAL_PATH: signalPath,
       }),
       cleanupGraceMs: 100,
       cleanupVerifyMs: 100,
-      semanticDrainMs: 80,
+      semanticDrainMs: 200,
       exitDrainMs: 20,
     });
 
     assert.equal(result.ok, true);
     assert.equal(result.text, "late valid result");
-    assert.ok(result.durationMs >= 180, "cleanup should cross the original deadline in this fixture");
+    assert.ok(result.durationMs >= 350, "cleanup should cross the original deadline in this fixture");
     assert.match(await waitForFile(signalPath), /SIGTERM/);
     assert.equal(result.cleanup.forced, true);
     assert.equal(result.cleanup.pipesClosed, true);

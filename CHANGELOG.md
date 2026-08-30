@@ -2,6 +2,12 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## Unreleased
+
+### Fixed
+
+- Oversized tool-result JSONL events are now drained and discarded within the existing 1 MiB pending-line bound, allowing later terminal answers to survive large browser, image, or command results.
+
 ## [0.5.0] - 2026-08-29
 
 ### Added

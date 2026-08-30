@@ -116,6 +116,18 @@ if (scenario === "clean") {
 } else if (scenario === "oversized") {
   process.stdout.write("x".repeat(1024 * 1024 + 1));
   setInterval(() => {}, 1000);
+} else if (scenario === "oversized-tool-result") {
+  emit({
+    type: "message_end",
+    message: {
+      role: "toolResult",
+      toolCallId: "large-result",
+      toolName: "browser",
+      content: [{ type: "text", text: "x".repeat(1024 * 1024 + 1) }],
+    },
+  });
+  emit(finalMessage("answer after large tool result"));
+  emit({ type: "agent_settled" });
 } else if (scenario === "hang") {
   const timer = setInterval(() => {}, 1000);
   process.on("SIGTERM", () => {

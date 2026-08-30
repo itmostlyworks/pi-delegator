@@ -71,6 +71,7 @@ interface DelegateProfile {
 ### `src/protocol.ts`
 
 - Incremental UTF-8 line buffering with a maximum pending-line size.
+- Discards oversized tool-result events through a bounded drain-to-newline mode; oversized assistant or unclassifiable lines remain protocol errors because they may affect completion authority.
 - Parses only event types needed to classify progress and completion.
 - Tracks assistant messages, errors, usage, tool starts/ends, and `agent_settled` when present.
 - Unknown valid JSON events are ignored.

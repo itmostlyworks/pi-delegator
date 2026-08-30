@@ -103,7 +103,48 @@ test("retains malformed lines only as a bounded diagnostic count", () => {
   assert.equal(parser.state.finalText, "valid");
 });
 
-test("rejects an oversized pending JSONL line", () => {
+test("discards oversized tool-result events and continues with later lines", () => {
+  const parser = new ProtocolParser({ maxPendingBytes: 256 });
+  const toolResult = `${JSON.stringify({
+    sessionId: "fixture",
+    type: "message_end",
+    message: {
+      toolCallId: "large-result",
+      toolName: "browser",
+      content: [{ type: "text", text: "small prefix" }],
+      role: "toolResult",
+      details: "x".repeat(500),
+    },
+  })}\n`;
+  const final = `${JSON.stringify({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "work preserved" }], stopReason: "stop" },
+  })}\n`;
+  const output = Buffer.from(`${toolResult}${final}`);
+
+  parser.push(output.subarray(0, 200));
+  parser.push(output.subarray(200));
+
+  assert.equal(parser.state.finalText, "work preserved");
+});
+
+test("rejects oversized assistant and unclassifiable JSONL lines", () => {
+  const oversizedAssistant = Buffer.from(`${JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{
+        type: "toolCall",
+        arguments: { message: { role: "toolResult" }, padding: "x".repeat(500) },
+      }],
+      stopReason: "error",
+    },
+  })}\n`);
+  assert.throws(
+    () => new ProtocolParser({ maxPendingBytes: 256 }).push(oversizedAssistant),
+    ProtocolLineTooLargeError,
+  );
+
   const parser = new ProtocolParser();
   assert.throws(
     () => parser.push(Buffer.alloc(MAX_PENDING_JSONL_BYTES + 1, 0x78)),
