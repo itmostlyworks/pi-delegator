@@ -2,6 +2,13 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.5.2] - 2026-08-30
+
+### Fixed
+
+- Transient assistant errors no longer trigger delegate cleanup while Pi is waiting to retry the provider call; a later successful retry now supersedes the failed attempt.
+- Queued continuations invalidate stale terminal candidates and semantic-drain timers so later turns are not interrupted or replaced by earlier output.
+
 ## [0.5.1] - 2026-08-30
 
 ### Fixed
@@ -64,6 +71,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.5.2]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/itmostlyworks/pi-delegator/compare/v0.3.1...v0.4.0

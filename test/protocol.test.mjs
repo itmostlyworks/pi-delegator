@@ -177,3 +177,63 @@ test("captures assistant errors instead of terminal text", () => {
   assert.equal(parser.state.assistantError, "provider failed");
   assert.equal(parser.state.finalText, undefined);
 });
+
+test("invalidates a stale terminal answer when a later turn is still active", () => {
+  const finalEvent = JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "intermediate" }],
+      stopReason: "stop",
+    },
+  });
+
+  const queuedTurn = new ProtocolParser();
+  queuedTurn.push(Buffer.from(`${finalEvent}\n${JSON.stringify({ type: "turn_start", turnIndex: 1 })}\n`));
+  assert.equal(queuedTurn.state.finalText, undefined);
+
+  const toolTurn = new ProtocolParser();
+  toolTurn.push(Buffer.from([
+    finalEvent,
+    JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "continuing" }],
+        stopReason: "toolUse",
+      },
+    }),
+    "",
+  ].join("\n")));
+  assert.equal(toolTurn.state.finalText, undefined);
+});
+
+test("allows a successful Pi retry to supersede a transient assistant error", () => {
+  const parser = new ProtocolParser();
+  parser.push(Buffer.from([
+    JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "websocket error",
+      },
+    }),
+    JSON.stringify({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 2_000 }),
+    JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "recovered" }],
+        stopReason: "stop",
+      },
+    }),
+    JSON.stringify({ type: "agent_settled" }),
+    "",
+  ].join("\n")));
+
+  assert.equal(parser.state.assistantError, undefined);
+  assert.equal(parser.state.finalText, "recovered");
+  assert.equal(parser.state.agentSettled, true);
+});

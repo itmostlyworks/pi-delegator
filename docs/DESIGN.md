@@ -73,7 +73,7 @@ interface DelegateProfile {
 - Incremental UTF-8 line buffering with a maximum pending-line size.
 - Discards oversized tool-result events through a bounded drain-to-newline mode; oversized assistant or unclassifiable lines remain protocol errors because they may affect completion authority.
 - Parses only event types needed to classify progress and completion.
-- Tracks assistant messages, errors, usage, tool starts/ends, and `agent_settled` when present.
+- Tracks assistant messages, errors, usage, turn/tool activity, and `agent_settled` when present. A later turn supersedes a transient failed attempt or stale terminal candidate from Pi's in-process continuation and provider-retry paths.
 - Unknown valid JSON events are ignored.
 - Non-JSON lines are retained only as bounded diagnostics unless the child protocol explicitly permits them.
 
@@ -159,7 +159,7 @@ Do not retain the full transcript. Keep only information needed for progress, co
 
 ### Terminal answer
 
-Treat a finalized assistant text message that represents a non-tool terminal stop as the candidate final answer. `agent_settled`, when received, strengthens completion evidence and begins post-settle drainage.
+Treat a finalized assistant text message that represents a non-tool terminal stop as the candidate final answer. `agent_settled`, when received, strengthens completion evidence and begins post-settle drainage. An assistant error alone is not semantic completion because Pi may retry a transient provider failure inside the same child; only the settled final assistant outcome is authoritative.
 
 Do not require the OS process to exit cleanly before preserving a valid candidate answer. A leaked watcher can keep the process alive after semantically complete work.
 

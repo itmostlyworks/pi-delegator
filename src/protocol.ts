@@ -260,6 +260,13 @@ export class ProtocolParser {
       return;
     }
 
+    if (record.type === "turn_start") {
+      // A queued continuation makes any answer from the preceding turn stale.
+      delete this.state.finalText;
+      delete this.state.assistantError;
+      return;
+    }
+
     if (record.type !== "message_end") return;
     const message = asRecord(record.message);
     if (!message || message.role !== "assistant") return;
@@ -274,9 +281,14 @@ export class ProtocolParser {
 
     if (stopReason === "error" || stopReason === "aborted") {
       this.state.assistantError = errorMessage ?? `Assistant stopped with reason: ${stopReason}`;
+      delete this.state.finalText;
       return;
     }
 
+    // Pi may retry transient provider failures inside the same child process. A
+    // later non-error assistant turn supersedes the failed attempt.
+    delete this.state.assistantError;
     if (text !== undefined && isTerminalStop(stopReason)) this.state.finalText = text;
+    else delete this.state.finalText;
   }
 }

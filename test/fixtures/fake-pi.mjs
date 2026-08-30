@@ -113,6 +113,48 @@ if (scenario === "clean") {
       errorMessage: "fixture model error",
     },
   });
+} else if (scenario === "assistant-error-then-success") {
+  emit({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "websocket error",
+    },
+  });
+  emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 80 });
+  setTimeout(() => {
+    emit(finalMessage("recovered after retry"));
+    emit({ type: "auto_retry_end", success: true, attempt: 1 });
+    emit({ type: "agent_settled" });
+  }, 80);
+} else if (scenario === "answer-then-error-then-success") {
+  emit(finalMessage("intermediate answer"));
+  setTimeout(() => {
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "websocket error",
+      },
+    });
+    emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 120 });
+  }, 30);
+  setTimeout(() => {
+    emit(finalMessage("recovered continuation"));
+    emit({ type: "auto_retry_end", success: true, attempt: 1 });
+    emit({ type: "agent_settled" });
+  }, 150);
+} else if (scenario === "answer-then-continuation") {
+  emit(finalMessage("stale answer"));
+  setTimeout(() => emit({ type: "turn_start", turnIndex: 1, timestamp: Date.now() }), 30);
+  setTimeout(() => {
+    emit(finalMessage("completed continuation"));
+    emit({ type: "agent_settled" });
+  }, 150);
 } else if (scenario === "oversized") {
   process.stdout.write("x".repeat(1024 * 1024 + 1));
   setInterval(() => {}, 1000);

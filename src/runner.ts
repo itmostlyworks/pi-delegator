@@ -423,21 +423,32 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       void finalize({ type: "process_done", forcedPipeDrain });
     };
 
+    const hasSemanticCompletion = (): boolean =>
+      parser.state.agentSettled ||
+      (parser.state.finalText !== undefined && parser.state.assistantError === undefined);
+
     const armSemanticDrain = (): void => {
-      if (semanticDrainTimer || finalizing) return;
-      if (
-        parser.state.finalText === undefined &&
-        parser.state.assistantError === undefined &&
-        !parser.state.agentSettled
-      ) {
+      if (finalizing) return;
+      // An assistant error is not semantic completion: Pi may be waiting to
+      // retry a transient provider failure inside this same child process.
+      if (!hasSemanticCompletion()) {
+        if (semanticDrainTimer) clearTimeout(semanticDrainTimer);
+        semanticDrainTimer = undefined;
+        semanticCompletionObserved = false;
         return;
       }
+      if (semanticDrainTimer) return;
       if (Date.now() >= deadlineAt) {
         void finalize({ type: "run_timeout" });
         return;
       }
       semanticCompletionObserved = true;
       semanticDrainTimer = setTimeout(() => {
+        semanticDrainTimer = undefined;
+        if (!hasSemanticCompletion()) {
+          semanticCompletionObserved = false;
+          return;
+        }
         void finalize({ type: "semantic_done" });
       }, semanticDrainMs);
     };

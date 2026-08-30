@@ -339,6 +339,60 @@ test("reports assistant/model errors", async () => {
   });
 });
 
+test("allows Pi to recover from a transient assistant error inside the child", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 500 },
+      task: "Recover from websocket failure",
+      cwd,
+      env: fixtureEnv("assistant-error-then-success"),
+      cleanupGraceMs: 50,
+      semanticDrainMs: 20,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "recovered after retry");
+    assert.ok(result.durationMs >= 70, "delegate must remain alive during Pi's retry backoff");
+  });
+});
+
+test("cancels stale semantic drainage when a later assistant turn is retried", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 500 },
+      task: "Recover a queued continuation",
+      cwd,
+      env: fixtureEnv("answer-then-error-then-success"),
+      cleanupGraceMs: 50,
+      semanticDrainMs: 80,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "recovered continuation");
+    assert.ok(result.durationMs >= 140, "stale semantic drainage must not interrupt retry backoff");
+  });
+});
+
+test("does not return a stale answer while a queued continuation is active", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: { ...SCOUT_PROFILE, timeoutMs: 500 },
+      task: "Wait for the queued continuation",
+      cwd,
+      env: fixtureEnv("answer-then-continuation"),
+      cleanupGraceMs: 50,
+      semanticDrainMs: 80,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "completed continuation");
+    assert.ok(result.durationMs >= 140, "active continuation must invalidate earlier semantic completion");
+  });
+});
+
 test("wall-clock timeout signals the child and settles within cleanup grace", async () => {
   await withTempDir(async (cwd) => {
     const signalPath = join(cwd, "signals.txt");
