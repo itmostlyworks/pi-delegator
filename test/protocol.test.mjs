@@ -38,7 +38,7 @@ test("reports tool starts and aggregates assistant usage", () => {
   const toolStarts = [];
   const assistantMessages = [];
   const parser = new ProtocolParser({
-    onToolStart: (toolName) => toolStarts.push(toolName),
+    onToolStart: (toolName, args) => toolStarts.push({ toolName, args }),
     onAssistantMessage: (text) => assistantMessages.push(text),
   });
   parser.push(Buffer.from([
@@ -58,7 +58,12 @@ test("reports tool starts and aggregates assistant usage", () => {
         },
       },
     }),
-    JSON.stringify({ type: "tool_execution_start", toolCallId: "one", toolName: "read" }),
+    JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "one",
+      toolName: "read",
+      args: { path: "src" },
+    }),
     JSON.stringify({
       type: "message_end",
       message: {
@@ -78,7 +83,7 @@ test("reports tool starts and aggregates assistant usage", () => {
     "",
   ].join("\n")));
 
-  assert.deepEqual(toolStarts, ["read"]);
+  assert.deepEqual(toolStarts, [{ toolName: "read", args: { path: "src" } }]);
   assert.deepEqual(assistantMessages, ["checking", "done"]);
   assert.deepEqual(parser.state.usage, {
     input: 8,

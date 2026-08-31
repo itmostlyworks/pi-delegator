@@ -225,10 +225,12 @@ test("streams compact protocol progress data and aggregates usage", async () => 
       "tool_start",
       "assistant_message",
     ]);
+    const toolProgress = progress.filter((update) => update.type === "tool_start");
     assert.deepEqual(
-      progress.filter((update) => update.type === "tool_start").map((update) => update.toolName),
+      toolProgress.map((update) => update.toolName),
       ["read", "grep", "read", "read", "bash", "find", "ls", "工具工具工具工具工具工具工具"],
     );
+    assert.deepEqual(toolProgress[4].args, { command: "pnpm test -- --runInBand" });
     assert.deepEqual(result.usage, {
       input: 8,
       output: 9,

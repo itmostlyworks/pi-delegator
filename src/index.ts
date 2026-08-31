@@ -6,6 +6,7 @@ import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+import { classifyBashTool } from "./bash-classification.ts";
 import {
   getDelegateProfile,
   type DelegateProfile,
@@ -217,7 +218,10 @@ function formatProgress(
 ): string {
   if (progress.type === "tool_start") {
     summary.totalCalls += 1;
-    summary.recentTools.push(compactToolName(progress.toolName));
+    const displayName = progress.toolName === "bash"
+      ? classifyBashTool(progress.args)
+      : compactToolName(progress.toolName);
+    summary.recentTools.push(displayName);
     if (summary.recentTools.length > MAX_RECENT_PROGRESS_TOOLS) summary.recentTools.shift();
   }
   if (summary.totalCalls === 0) return "Working · no tool calls yet";

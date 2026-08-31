@@ -79,6 +79,7 @@ export type DelegateProgress =
   | {
       readonly type: "tool_start";
       readonly toolName: string;
+      readonly args: unknown;
       readonly usage: UsageSummary;
     }
   | {
@@ -394,11 +395,12 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
           usage: { ...parser.state.usage },
         });
       },
-      onToolStart: (toolName) => {
+      onToolStart: (toolName, args) => {
         if (!acceptingOutput) return;
         emitProgress({
           type: "tool_start",
           toolName,
+          args,
           usage: { ...parser.state.usage },
         });
       },

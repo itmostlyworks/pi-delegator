@@ -35,7 +35,7 @@ export class ProtocolLineTooLargeError extends Error {
 interface ProtocolParserOptions {
   maxPendingBytes?: number;
   onAssistantMessage?: (text: string | undefined) => void;
-  onToolStart?: (toolName: string) => void;
+  onToolStart?: (toolName: string, args: unknown) => void;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -177,7 +177,7 @@ export class ProtocolParser {
 
   readonly #maxPendingBytes: number;
   readonly #onAssistantMessage: ((text: string | undefined) => void) | undefined;
-  readonly #onToolStart: ((toolName: string) => void) | undefined;
+  readonly #onToolStart: ((toolName: string, args: unknown) => void) | undefined;
   #pending = Buffer.alloc(0);
   #discardingOversizedLine = false;
 
@@ -256,7 +256,9 @@ export class ProtocolParser {
     }
 
     if (record.type === "tool_execution_start") {
-      if (typeof record.toolName === "string" && record.toolName.length > 0) this.#onToolStart?.(record.toolName);
+      if (typeof record.toolName === "string" && record.toolName.length > 0) {
+        this.#onToolStart?.(record.toolName, record.args);
+      }
       return;
     }
 

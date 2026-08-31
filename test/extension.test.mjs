@@ -264,11 +264,11 @@ test("applies a model override while preserving profile thinking and streams com
       "2 tool calls: read → grep",
       "3 tool calls: read → grep → read",
       "4 tool calls: read → grep → read ×2",
-      "5 tool calls: read → grep → read ×2 → bash",
-      "6 tool calls: read → grep → read ×2 → bash → find",
-      "7 tool calls: … 1 earlier → grep → read ×2 → bash → find → ls",
-      "8 tool calls: … 2 earlier → read ×2 → bash → find → ls → 工具工具工具工具工具工具…",
-      "8 tool calls: … 2 earlier → read ×2 → bash → find → ls → 工具工具工具工具工具工具…",
+      "5 tool calls: read → grep → read ×2 → bash(pnpm test)",
+      "6 tool calls: read → grep → read ×2 → bash(pnpm test) → find",
+      "7 tool calls: … 1 earlier → grep → read ×2 → bash(pnpm test) → find → ls",
+      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…",
+      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…",
     ]);
     assert.equal(updates.at(-1).details.usage.turns, 2);
     assert.equal(result.details.usage.input, 8);
