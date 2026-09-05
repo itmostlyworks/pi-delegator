@@ -71,8 +71,10 @@ if (scenario === "clean") {
         output: 2,
         cacheRead: 1,
         cacheWrite: 4,
+        cacheWrite1h: 3,
+        reasoning: 1,
         totalTokens: 6,
-        cost: { total: 0.01 },
+        cost: { input: 0.003, output: 0.004, cacheRead: 0.001, cacheWrite: 0.002, total: 0.01 },
       },
     },
   });
@@ -95,15 +97,37 @@ if (scenario === "clean") {
         output: 7,
         cacheRead: 2,
         cacheWrite: 1,
+        cacheWrite1h: 1,
+        reasoning: 4,
         totalTokens: 13,
-        cost: { total: 0.02 },
+        cost: { input: 0.005, output: 0.01, cacheRead: 0.002, cacheWrite: 0.003, total: 0.02 },
       },
     },
   });
   emit({ type: "agent_settled" });
 } else if (scenario === "no-answer") {
   emit({ type: "agent_settled" });
-} else if (scenario === "assistant-error") {
+} else if (scenario === "assistant-error" || scenario === "assistant-error-after-usage") {
+  if (scenario === "assistant-error-after-usage") {
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Billable work" }],
+        stopReason: "toolUse",
+        usage: {
+          input: 3,
+          output: 2,
+          cacheRead: 1,
+          cacheWrite: 4,
+          cacheWrite1h: 3,
+          reasoning: 1,
+          totalTokens: 6,
+          cost: { input: 0.003, output: 0.004, cacheRead: 0.001, cacheWrite: 0.002, total: 0.01 },
+        },
+      },
+    });
+  }
   emit({
     type: "message_end",
     message: {

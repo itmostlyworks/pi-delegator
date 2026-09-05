@@ -31,6 +31,7 @@ function registeredTool(config, session = {}) {
         tool = definition;
       },
       on(eventName, handler) {
+        session.eventHandlers?.set(eventName, handler);
         if (eventName === "session_start") sessionStart = handler;
       },
     });
@@ -272,6 +273,17 @@ test("applies a model override while preserving profile thinking and streams com
     ]);
     assert.equal(updates.at(-1).details.usage.turns, 2);
     assert.equal(result.details.usage.input, 8);
+    assert.equal(result.details.usage.cost, 0.03);
+    assert.deepEqual(result.usage, {
+      input: 8,
+      output: 9,
+      cacheRead: 3,
+      cacheWrite: 5,
+      cacheWrite1h: 4,
+      reasoning: 5,
+      totalTokens: 19,
+      cost: { input: 0.008, output: 0.014, cacheRead: 0.003, cacheWrite: 0.005, total: 0.03 },
+    });
     const args = JSON.parse(await readFile(recordPath, "utf8"));
     assert.equal(args[args.indexOf("--model") + 1], "override/model");
     assert.equal(args[args.indexOf("--thinking") + 1], "high");
@@ -578,6 +590,52 @@ test("different trusted project sessions keep independent effective profile regi
   } finally {
     await rm(projectA, { recursive: true, force: true });
     await rm(projectB, { recursive: true, force: true });
+  }
+});
+
+test("tool_result accounts for billable child usage while runner failures still throw", async () => {
+  const eventHandlers = new Map();
+  const tool = registeredTool(undefined, { eventHandlers });
+  const fixture = resolve("test/fixtures/fake-pi.mjs");
+  const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
+  const previousScenario = process.env.FAKE_PI_SCENARIO;
+  process.env.PI_DELEGATOR_PI_BINARY = fixture;
+  process.env.FAKE_PI_SCENARIO = "assistant-error-after-usage";
+  try {
+    await assert.rejects(
+      tool.execute("billed-failure", { agent: "scout", task: "Fail after usage" }, undefined, undefined, context(process.cwd())),
+      /\[child_error\].*fixture model error/,
+    );
+
+    const toolResult = eventHandlers.get("tool_result");
+    assert.ok(toolResult);
+    const patch = await toolResult({
+      type: "tool_result",
+      toolName: "delegate",
+      toolCallId: "billed-failure",
+      input: { agent: "scout", task: "Fail after usage" },
+      content: [{ type: "text", text: "failure" }],
+      details: undefined,
+      isError: true,
+    });
+    assert.deepEqual(patch, {
+      usage: {
+        input: 3,
+        output: 2,
+        cacheRead: 1,
+        cacheWrite: 4,
+        cacheWrite1h: 3,
+        reasoning: 1,
+        totalTokens: 6,
+        cost: { input: 0.003, output: 0.004, cacheRead: 0.001, cacheWrite: 0.002, total: 0.01 },
+      },
+    });
+    assert.equal(await toolResult({ type: "tool_result", toolName: "delegate", toolCallId: "billed-failure" }), undefined);
+  } finally {
+    if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
+    else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
+    if (previousScenario === undefined) delete process.env.FAKE_PI_SCENARIO;
+    else process.env.FAKE_PI_SCENARIO = previousScenario;
   }
 });
 

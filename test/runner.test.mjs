@@ -240,6 +240,16 @@ test("streams compact protocol progress data and aggregates usage", async () => 
       contextTokens: 13,
       turns: 2,
     });
+    assert.deepEqual(result.nativeUsage, {
+      input: 8,
+      output: 9,
+      cacheRead: 3,
+      cacheWrite: 5,
+      cacheWrite1h: 4,
+      reasoning: 5,
+      totalTokens: 19,
+      cost: { input: 0.008, output: 0.014, cacheRead: 0.003, cacheWrite: 0.005, total: 0.03 },
+    });
   });
 });
 
@@ -450,6 +460,14 @@ test("already-aborted parent signal prevents launch", async () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.code, "cancelled");
+    assert.deepEqual(result.nativeUsage, {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
     await assert.rejects(readFile(recordPath, "utf8"));
   });
 });

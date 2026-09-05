@@ -143,7 +143,7 @@ Trusted projects may provide the same complete document at `.pi/pi-delegator.jso
 
 Delegate results show the selected profile, model selector, thinking level, and duration above the returned text. The model reflects call, effective-profile, and parent-session precedence; thinking comes from the effective profile. Pi may still resolve a fuzzy model selector or clamp thinking to the selected model's capabilities. The collapsed view uses the model ID and bounds the output preview by both lines and text length; expand the tool result to see the full provider/model selector and complete returned text.
 
-This metadata is display-only. The model-visible tool result remains the delegate's bounded response text.
+This metadata is display-only. The model-visible tool result remains the delegate's bounded response text. Delegated model usage is attached to Pi's tool result, so its tokens and cost are included in the parent session's footer and usage totals.
 
 ## Lifecycle and limits
 

@@ -53,8 +53,10 @@ test("reports tool starts and aggregates assistant usage", () => {
           output: 2,
           cacheRead: 1,
           cacheWrite: 4,
+          cacheWrite1h: 3,
+          reasoning: 1,
           totalTokens: 6,
-          cost: { total: 0.01 },
+          cost: { input: 0.003, output: 0.004, cacheRead: 0.001, cacheWrite: 0.002, total: 0.01 },
         },
       },
     }),
@@ -75,8 +77,10 @@ test("reports tool starts and aggregates assistant usage", () => {
           output: 7,
           cacheRead: 2,
           cacheWrite: 1,
+          cacheWrite1h: 1,
+          reasoning: 4,
           totalTokens: 13,
-          cost: { total: 0.02 },
+          cost: { input: 0.005, output: 0.01, cacheRead: 0.002, cacheWrite: 0.003, total: 0.02 },
         },
       },
     }),
@@ -93,6 +97,16 @@ test("reports tool starts and aggregates assistant usage", () => {
     cost: 0.03,
     contextTokens: 13,
     turns: 2,
+  });
+  assert.deepEqual(parser.state.nativeUsage, {
+    input: 8,
+    output: 9,
+    cacheRead: 3,
+    cacheWrite: 5,
+    cacheWrite1h: 4,
+    reasoning: 5,
+    totalTokens: 19,
+    cost: { input: 0.008, output: 0.014, cacheRead: 0.003, cacheWrite: 0.005, total: 0.03 },
   });
 });
 

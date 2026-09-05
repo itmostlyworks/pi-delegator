@@ -2,6 +2,12 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.5.4] - 2026-09-05
+
+### Fixed
+
+- Delegated model tokens and cost, including usage incurred before a failed run, now contribute to Pi's parent session and footer totals.
+
 ## [0.5.3] - 2026-08-30
 
 ### Changed
@@ -77,6 +83,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.5.4]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.0...v0.5.1

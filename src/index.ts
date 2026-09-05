@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { StringEnum } from "@earendil-works/pi-ai";
+import { StringEnum, type Usage } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -253,7 +253,11 @@ async function resolveWorkingDirectory(requested: string | undefined, parentCwd:
   return cwd;
 }
 
-function registerDelegateTool(pi: ExtensionAPI, profiles: DelegateProfileRegistry): void {
+function registerDelegateTool(
+  pi: ExtensionAPI,
+  profiles: DelegateProfileRegistry,
+  recordFailedUsage: (toolCallId: string, usage: Usage) => void,
+): void {
   const DelegateParameters = createDelegateParameters(profiles);
   const profileSummary = Object.values(profiles)
     .map((profile) => `${profile.name} (${profile.description})`)
@@ -271,7 +275,7 @@ function registerDelegateTool(pi: ExtensionAPI, profiles: DelegateProfileRegistr
     ],
     parameters: DelegateParameters,
 
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       const taskBytes = Buffer.byteLength(params.task, "utf8");
       if (params.task.trim().length === 0) throw new Error("Delegate task must not be blank");
       if (taskBytes > MAX_TASK_BYTES) {
@@ -314,10 +318,14 @@ function registerDelegateTool(pi: ExtensionAPI, profiles: DelegateProfileRegistr
             }),
       });
 
-      if (!result.ok) throw new Error(formatFailure(result));
+      if (!result.ok) {
+        recordFailedUsage(toolCallId, result.nativeUsage);
+        throw new Error(formatFailure(result));
+      }
       return {
         content: [{ type: "text", text: result.text }],
         details: successDetails(result, profile, model, thinking),
+        usage: result.nativeUsage,
       };
     },
 
@@ -333,11 +341,22 @@ function registerDelegateTool(pi: ExtensionAPI, profiles: DelegateProfileRegistr
 
 export default function piDelegator(pi: ExtensionAPI): void {
   const userProfiles = loadDelegateProfiles();
+  const failedUsageByToolCallId = new Map<string, Usage>();
+
+  pi.on("tool_result", (event) => {
+    if (event.toolName !== "delegate") return;
+    const usage = failedUsageByToolCallId.get(event.toolCallId);
+    if (usage === undefined) return;
+    failedUsageByToolCallId.delete(event.toolCallId);
+    return { usage: { ...usage, cost: { ...usage.cost } } };
+  });
 
   pi.on("session_start", (_event, ctx) => {
     const profiles = ctx.isProjectTrusted()
       ? loadDelegateProfiles(getProjectDelegateConfigPath(ctx.cwd), userProfiles)
       : userProfiles;
-    registerDelegateTool(pi, profiles);
+    registerDelegateTool(pi, profiles, (toolCallId, usage) => {
+      failedUsageByToolCallId.set(toolCallId, usage);
+    });
   });
 }

@@ -4,6 +4,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
+import type { Usage } from "@earendil-works/pi-ai";
+
 import type { DelegateProfile } from "./agents.ts";
 import { createProcessTreeController, type ProcessTreeController } from "./process-tree.ts";
 import {
@@ -19,6 +21,21 @@ const DEFAULT_CLEANUP_VERIFY_MS = 1_000;
 const DEFAULT_EXIT_DRAIN_MS = 250;
 const DEFAULT_SEMANTIC_DRAIN_MS = 250;
 const PIPE_CLOSE_VERIFY_MS = 50;
+
+function zeroNativeUsage(): Usage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+function cloneNativeUsage(usage: Usage): Usage {
+  return { ...usage, cost: { ...usage.cost } };
+}
 
 export function isSupportedPlatform(platform: NodeJS.Platform): boolean {
   return platform === "darwin" || platform === "linux";
@@ -59,6 +76,7 @@ export interface DelegateSuccess {
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
   readonly usage: UsageSummary;
+  readonly nativeUsage: Usage;
   readonly cleanup: CleanupDetails;
 }
 
@@ -70,6 +88,7 @@ export interface DelegateFailure {
   readonly stderr: string;
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
+  readonly nativeUsage: Usage;
   readonly cleanup: CleanupDetails;
 }
 
@@ -257,6 +276,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      nativeUsage: zeroNativeUsage(),
       cleanup: NO_CLEANUP,
     };
   }
@@ -270,6 +290,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      nativeUsage: zeroNativeUsage(),
       cleanup: NO_CLEANUP,
     };
   }
@@ -292,6 +313,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
         stderr: "",
         malformedLineCount: 0,
         exitCode: null,
+        nativeUsage: zeroNativeUsage(),
         cleanup: NO_CLEANUP,
       };
     }
@@ -306,6 +328,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      nativeUsage: zeroNativeUsage(),
       cleanup: NO_CLEANUP,
     };
   }
@@ -321,6 +344,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      nativeUsage: zeroNativeUsage(),
       cleanup: NO_CLEANUP,
     };
   }
@@ -335,6 +359,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       stderr: "",
       malformedLineCount: 0,
       exitCode: null,
+      nativeUsage: zeroNativeUsage(),
       cleanup: NO_CLEANUP,
     };
   }
@@ -467,6 +492,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
           stderr,
           malformedLineCount: parser.state.malformedLineCount,
           exitCode,
+          nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
           cleanup,
         };
       }
@@ -481,6 +507,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
           malformedLineCount: parser.state.malformedLineCount,
           exitCode,
           usage: { ...parser.state.usage },
+          nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
           cleanup,
         };
       }
@@ -492,6 +519,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
         stderr,
         malformedLineCount: parser.state.malformedLineCount,
         exitCode,
+        nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
         cleanup,
       };
     };
@@ -553,6 +581,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
             cleanup,
           };
           break;
@@ -565,6 +594,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
             cleanup,
           };
           break;
@@ -577,6 +607,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
             cleanup,
           };
           break;
@@ -592,6 +623,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
             stderr,
             malformedLineCount: parser.state.malformedLineCount,
             exitCode,
+            nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
             cleanup,
           };
           break;

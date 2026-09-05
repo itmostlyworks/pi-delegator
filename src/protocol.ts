@@ -1,3 +1,5 @@
+import type { Usage } from "@earendil-works/pi-ai";
+
 const NEWLINE = 0x0a;
 const CARRIAGE_RETURN = 0x0d;
 
@@ -20,6 +22,7 @@ export interface ProtocolState {
   agentSettled: boolean;
   malformedLineCount: number;
   usage: UsageSummary;
+  nativeUsage: Usage;
 }
 
 export class ProtocolLineTooLargeError extends Error {
@@ -142,21 +145,56 @@ function isDiscardableOversizedLine(prefix: Buffer): boolean {
     && directStringProperty(text, messageStart, "role") === "toolResult";
 }
 
-function aggregateUsage(current: UsageSummary, message: Record<string, unknown>): UsageSummary {
+function aggregateOptional(current: number | undefined, value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? (current ?? 0) + value
+    : current;
+}
+
+function aggregateUsage(
+  current: UsageSummary,
+  currentNative: Usage,
+  message: Record<string, unknown>,
+): { summary: UsageSummary; native: Usage } {
   const usage = asRecord(message.usage);
-  if (!usage) return { ...current, turns: current.turns + 1 };
+  if (!usage) return { summary: { ...current, turns: current.turns + 1 }, native: currentNative };
   const cost = asRecord(usage.cost);
+  const input = nonnegativeNumber(usage.input);
+  const output = nonnegativeNumber(usage.output);
+  const cacheRead = nonnegativeNumber(usage.cacheRead);
+  const cacheWrite = nonnegativeNumber(usage.cacheWrite);
+  const totalCost = nonnegativeNumber(cost?.total);
+  const cacheWrite1h = aggregateOptional(currentNative.cacheWrite1h, usage.cacheWrite1h);
+  const reasoning = aggregateOptional(currentNative.reasoning, usage.reasoning);
   return {
-    input: current.input + nonnegativeNumber(usage.input),
-    output: current.output + nonnegativeNumber(usage.output),
-    cacheRead: current.cacheRead + nonnegativeNumber(usage.cacheRead),
-    cacheWrite: current.cacheWrite + nonnegativeNumber(usage.cacheWrite),
-    cost: current.cost + nonnegativeNumber(cost?.total),
-    contextTokens:
-      typeof usage.totalTokens === "number" && Number.isFinite(usage.totalTokens) && usage.totalTokens >= 0
-        ? usage.totalTokens
-        : current.contextTokens,
-    turns: current.turns + 1,
+    summary: {
+      input: current.input + input,
+      output: current.output + output,
+      cacheRead: current.cacheRead + cacheRead,
+      cacheWrite: current.cacheWrite + cacheWrite,
+      cost: current.cost + totalCost,
+      contextTokens:
+        typeof usage.totalTokens === "number" && Number.isFinite(usage.totalTokens) && usage.totalTokens >= 0
+          ? usage.totalTokens
+          : current.contextTokens,
+      turns: current.turns + 1,
+    },
+    native: {
+      input: currentNative.input + input,
+      output: currentNative.output + output,
+      cacheRead: currentNative.cacheRead + cacheRead,
+      cacheWrite: currentNative.cacheWrite + cacheWrite,
+      ...(cacheWrite1h === undefined ? {} : { cacheWrite1h }),
+      ...(reasoning === undefined ? {} : { reasoning }),
+      totalTokens: currentNative.totalTokens + nonnegativeNumber(usage.totalTokens),
+      cost: {
+        input: currentNative.cost.input + nonnegativeNumber(cost?.input),
+        output: currentNative.cost.output + nonnegativeNumber(cost?.output),
+        cacheRead: currentNative.cost.cacheRead + nonnegativeNumber(cost?.cacheRead),
+        cacheWrite: currentNative.cost.cacheWrite + nonnegativeNumber(cost?.cacheWrite),
+        total: currentNative.cost.total + totalCost,
+      },
+    },
   };
 }
 
@@ -172,6 +210,14 @@ export class ProtocolParser {
       cost: 0,
       contextTokens: 0,
       turns: 0,
+    },
+    nativeUsage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   };
 
@@ -273,7 +319,9 @@ export class ProtocolParser {
     const message = asRecord(record.message);
     if (!message || message.role !== "assistant") return;
 
-    this.state.usage = aggregateUsage(this.state.usage, message);
+    const aggregatedUsage = aggregateUsage(this.state.usage, this.state.nativeUsage, message);
+    this.state.usage = aggregatedUsage.summary;
+    this.state.nativeUsage = aggregatedUsage.native;
     const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
     const errorMessage = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
     if (stopReason !== undefined) this.state.stopReason = stopReason;
