@@ -156,7 +156,7 @@ Model-visible output is bounded:
 - final response: 50 KiB, with explicit truncation metadata
 - stderr tail: 64 KiB
 - pending JSONL line: 1 MiB; oversized tool-result events are discarded without discarding the run
-- progress: compact accumulating tool-call count and recent tool-start order
+- progress: compact accumulating tool-call count, recent tool-start order, and a bounded preview of the latest assistant text
 
 ## Deliberate limitations
 

@@ -2,6 +2,12 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.5.5] - 2026-09-05
+
+### Changed
+
+- Delegate progress now includes a bounded, whitespace-normalized preview of the latest non-empty assistant text alongside accumulated tool activity.
+
 ## [0.5.4] - 2026-09-05
 
 ### Fixed
@@ -83,6 +89,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.5.5]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.1...v0.5.2

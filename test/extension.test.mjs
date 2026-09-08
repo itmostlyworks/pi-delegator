@@ -260,16 +260,16 @@ test("applies a model override while preserving profile thinking and streams com
     assert.equal(result.details.model, "override/model");
     assert.equal(result.details.thinking, "high");
     assert.deepEqual(updates.map((update) => update.content[0].text), [
-      "Working · no tool calls yet",
-      "1 tool call: read",
-      "2 tool calls: read → grep",
-      "3 tool calls: read → grep → read",
-      "4 tool calls: read → grep → read ×2",
-      "5 tool calls: read → grep → read ×2 → bash(pnpm test)",
-      "6 tool calls: read → grep → read ×2 → bash(pnpm test) → find",
-      "7 tool calls: … 1 earlier → grep → read ×2 → bash(pnpm test) → find → ls",
-      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…",
-      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…",
+      "Working · no tool calls yet\nLatest: Inspecting code",
+      "1 tool call: read\nLatest: Inspecting code",
+      "2 tool calls: read → grep\nLatest: Inspecting code",
+      "3 tool calls: read → grep → read\nLatest: Inspecting code",
+      "4 tool calls: read → grep → read ×2\nLatest: Inspecting code",
+      "5 tool calls: read → grep → read ×2 → bash(pnpm test)\nLatest: Inspecting code",
+      "6 tool calls: read → grep → read ×2 → bash(pnpm test) → find\nLatest: Inspecting code",
+      "7 tool calls: … 1 earlier → grep → read ×2 → bash(pnpm test) → find → ls\nLatest: Inspecting code",
+      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…\nLatest: Inspecting code",
+      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…\nLatest: Review complete",
     ]);
     assert.equal(updates.at(-1).details.usage.turns, 2);
     assert.equal(result.details.usage.input, 8);
@@ -324,14 +324,19 @@ test("returns an explicit truncation marker in model-facing tool content", async
   process.env.FAKE_PI_SCENARIO = "clean";
   process.env.FAKE_PI_OUTPUT = "😀".repeat(13_000);
   try {
+    const updates = [];
     const result = await tool.execute(
       "truncated",
       { agent: "scout", task: "Return a large answer" },
       undefined,
-      undefined,
+      (update) => updates.push(update),
       context(directory),
     );
 
+    assert.equal(updates.length, 1);
+    const preview = updates[0].content[0].text.replace("Working · no tool calls yet\nLatest: ", "");
+    assert.equal(Array.from(preview).length, 241);
+    assert.equal(preview, `${"😀".repeat(240)}…`);
     assert.equal(result.details.truncated, true);
     assert.equal(result.details.originalBytes, 52_000);
     assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);

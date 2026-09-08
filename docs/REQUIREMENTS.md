@@ -104,6 +104,7 @@ Configuration is immutable for each session. Trusted projects may provide the sa
 Progress is observational, never lifecycle authority.
 
 - Stream a compact update when the child starts a tool or completes an assistant message.
+- Include a bounded, whitespace-normalized preview of the latest non-empty assistant text alongside accumulated tool activity.
 - Do not persist every event.
 - Silence does not itself mean failure; hard deadlines decide failure.
 - Tool-level deadlines may be added only for known-fast tools and must never extend the run deadline.

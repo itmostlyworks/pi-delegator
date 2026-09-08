@@ -32,6 +32,7 @@ export { MAX_MODEL_BYTES } from "./config.ts";
 export const MAX_TASK_BYTES = 32 * 1024;
 const MAX_PROGRESS_TOOL_NAME_CODEPOINTS = 12;
 const MAX_RECENT_PROGRESS_TOOLS = 6;
+const MAX_PROGRESS_ASSISTANT_CODEPOINTS = 240;
 const MAX_COLLAPSED_RESULT_LINES = 10;
 const MAX_COLLAPSED_RESULT_CODEPOINTS = 1_000;
 
@@ -138,9 +139,19 @@ function progressDetails(
   };
 }
 
-interface ToolProgressSummary {
+interface ProgressSummary {
   totalCalls: number;
   readonly recentTools: string[];
+  latestAssistantText?: string;
+}
+
+function compactAssistantText(text: string): string | undefined {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (normalized.length === 0) return undefined;
+  const codepoints = Array.from(normalized);
+  return codepoints.length <= MAX_PROGRESS_ASSISTANT_CODEPOINTS
+    ? normalized
+    : `${codepoints.slice(0, MAX_PROGRESS_ASSISTANT_CODEPOINTS).join("")}…`;
 }
 
 function compactToolName(toolName: string): string {
@@ -214,7 +225,7 @@ function formatRenderedResult(
 
 function formatProgress(
   progress: DelegateProgress,
-  summary: ToolProgressSummary,
+  summary: ProgressSummary,
 ): string {
   if (progress.type === "tool_start") {
     summary.totalCalls += 1;
@@ -223,22 +234,31 @@ function formatProgress(
       : compactToolName(progress.toolName);
     summary.recentTools.push(displayName);
     if (summary.recentTools.length > MAX_RECENT_PROGRESS_TOOLS) summary.recentTools.shift();
+  } else if (progress.text !== undefined) {
+    const latestAssistantText = compactAssistantText(progress.text);
+    if (latestAssistantText !== undefined) summary.latestAssistantText = latestAssistantText;
   }
-  if (summary.totalCalls === 0) return "Working · no tool calls yet";
 
-  const runs: Array<{ name: string; count: number }> = [];
-  for (const toolName of summary.recentTools) {
-    const previous = runs.at(-1);
-    if (previous?.name === toolName) previous.count += 1;
-    else runs.push({ name: toolName, count: 1 });
+  let tools = "Working · no tool calls yet";
+  if (summary.totalCalls > 0) {
+    const runs: Array<{ name: string; count: number }> = [];
+    for (const toolName of summary.recentTools) {
+      const previous = runs.at(-1);
+      if (previous?.name === toolName) previous.count += 1;
+      else runs.push({ name: toolName, count: 1 });
+    }
+    const order = runs
+      .map(({ name, count }) => count === 1 ? name : `${name} ×${count}`)
+      .join(" → ");
+    const omitted = summary.totalCalls - summary.recentTools.length;
+    const earlier = omitted === 0 ? "" : `… ${omitted} earlier → `;
+    const calls = summary.totalCalls === 1 ? "tool call" : "tool calls";
+    tools = `${summary.totalCalls} ${calls}: ${earlier}${order}`;
   }
-  const order = runs
-    .map(({ name, count }) => count === 1 ? name : `${name} ×${count}`)
-    .join(" → ");
-  const omitted = summary.totalCalls - summary.recentTools.length;
-  const earlier = omitted === 0 ? "" : `… ${omitted} earlier → `;
-  const calls = summary.totalCalls === 1 ? "tool call" : "tool calls";
-  return `${summary.totalCalls} ${calls}: ${earlier}${order}`;
+
+  return summary.latestAssistantText === undefined
+    ? tools
+    : `${tools}\nLatest: ${summary.latestAssistantText}`;
 }
 
 async function resolveWorkingDirectory(requested: string | undefined, parentCwd: string): Promise<string> {
@@ -293,7 +313,7 @@ function registerDelegateTool(
         (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
       const thinking = profile.thinking;
       const startedAt = Date.now();
-      const toolProgress: ToolProgressSummary = { totalCalls: 0, recentTools: [] };
+      const progressSummary: ProgressSummary = { totalCalls: 0, recentTools: [] };
       const result = await runDelegate({
         profile,
         task: params.task,
@@ -305,7 +325,7 @@ function registerDelegateTool(
           : {
               onProgress: (progress: DelegateProgress) => {
                 onUpdate({
-                  content: [{ type: "text", text: formatProgress(progress, toolProgress) }],
+                  content: [{ type: "text", text: formatProgress(progress, progressSummary) }],
                   details: progressDetails(
                     profile,
                     model,
