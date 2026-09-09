@@ -151,6 +151,10 @@ Prefer small fixture scripts over mocks of `node:child_process`; real processes 
 - child spawns a TERM-resistant descendant
 - pipe-drain guard finalizes without waiting indefinitely
 - forced cleanup metadata is accurate
+- actual Pi Bash tool background descendants are gone after normal completion, run timeout, and parent cancellation
+- Bash-supplied timeout/abort ends the delegation and cannot be hidden by a terminal candidate
+- private Bash registration wins over conflicting configured extensions through Pi's actual loader
+- Bash output drainage has a fixed bound and no callbacks occur after settlement
 
 ### Tool timeout
 

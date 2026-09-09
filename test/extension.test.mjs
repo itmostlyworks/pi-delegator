@@ -495,7 +495,11 @@ test("trusted parent project profiles add, replace, disable, and launch explicit
     assert.equal(args[args.indexOf("--thinking") + 1], "high");
     assert.equal(args[args.indexOf("--tools") + 1], "bash,project_tool");
     assert.equal(args[args.indexOf("--skill") + 1], await realpath(skillPath));
-    assert.equal(args[args.indexOf("--extension") + 1], await realpath(extensionPath));
+    const extensions = args.flatMap((argument, index) =>
+      argument === "--extension" ? [args[index + 1]] : []
+    );
+    assert.match(extensions[0], /delegate-bash-extension\.ts$/);
+    assert.equal(extensions[1], await realpath(extensionPath));
     assert.equal(await readFile(promptContentPath, "utf8"), "Project role prompt\n");
   } finally {
     await rm(directory, { recursive: true, force: true });

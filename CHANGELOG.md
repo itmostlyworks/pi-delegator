@@ -2,6 +2,17 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.5.6] - 2026-09-09
+
+### Fixed
+
+- Keep ordinary Bash subprocesses in the delegate-owned process group so background commands are cleaned up after completion, timeout, and cancellation.
+- Bound Bash post-exit output drainage and remove stream listeners at settlement.
+
+### Changed
+
+- A private Bash implementation takes precedence over configured Bash overrides. Bash-supplied timeout or abort now ends the whole delegation to ensure cleanup; custom Pi `shellPath` is not applied.
+
 ## [0.5.5] - 2026-09-05
 
 ### Changed
@@ -89,6 +100,7 @@ All notable changes to `pi-delegator` are documented here.
 - Process-based lifecycle, protocol, configuration, profile, and concurrency tests using a fake Pi executable.
 - Installation, usage, limitations, and manual real-Pi smoke-test documentation.
 
+[0.5.6]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/itmostlyworks/pi-delegator/compare/v0.5.2...v0.5.3

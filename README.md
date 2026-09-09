@@ -147,9 +147,13 @@ This metadata is display-only. The model-visible tool result remains the delegat
 
 ## Lifecycle and limits
 
-Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables ambient extension and skill discovery; only the selected profile's explicit local capabilities are added back. This prevents ambient child behavior and direct reloading of pi-delegator through configured tools or extension paths. Explicit extensions remain trusted executable code and may launch their own subprocesses. The child still receives Pi's normal coding prompt and trusted project instructions.
+Each call launches exactly one foreground child in a dedicated POSIX process group. The child uses an ephemeral session and disables ambient extension and skill discovery; only the selected profile's explicit local capabilities and a private Bash lifecycle extension are added back. This prevents ambient child behavior and direct reloading of pi-delegator through configured tools or extension paths. Explicit extensions remain trusted executable code and may launch their own subprocesses. The child still receives Pi's normal coding prompt and trusted project instructions.
 
 The runner enforces a hard wall-clock deadline and propagates parent cancellation to the entire process group using bounded TERM → KILL cleanup. It does not wait exclusively for stdio to close, so descendants holding pipes open cannot leave the tool pending indefinitely. A validated terminal answer remains successful if forced post-answer cleanup is required, and cleanup details are returned with the tool result.
+
+For Bash-enabled profiles, the private extension takes precedence over configured Bash overrides and keeps ordinary shell descendants in the delegate's process group. It uses `/bin/bash` (or `bash` from `PATH`), not Pi's custom `shellPath` setting. **A Bash command's supplied timeout or abort ends the entire delegation**, triggering group cleanup rather than letting the model continue alongside a surviving command. Post-exit Bash output drains for at most 100 ms; later background output is discarded.
+
+Process-group cleanup is not a sandbox: deliberately detached/daemonized processes and subprocesses launched into separate groups by trusted custom extensions are outside this guarantee. Cancellation means Pi's tool abort signal; abruptly killing the parent process is not equivalent and does not guarantee immediate cleanup.
 
 Model-visible output is bounded:
 

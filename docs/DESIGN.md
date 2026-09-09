@@ -68,6 +68,15 @@ interface DelegateProfile {
 - Captures bounded stderr.
 - Owns timers, abort listener, process-control calls, and the single finalization gate.
 
+### `src/delegate-bash-extension.ts`
+
+- Private child-only extension loaded before configured extensions: Pi uses the first registration for each tool name.
+- Wraps Pi's public `createBashTool` with `BashOperations` that spawn shells with `detached: false`, preserving the outer runner's process-group ownership even after ordinary background commands reparent.
+- Uses `/bin/bash` or `bash` on `PATH`; custom Pi `shellPath` is not applied.
+- Bash timeout/abort fails the whole child with reserved exit codes defined in `delegate-child-contract.ts`. The outer runner prioritizes these failures over any terminal candidate and performs its normal bounded cleanup. This intentionally prevents model continuation after a command-local cancellation.
+- Settles on pipe close or a fixed 100 ms post-exit drain deadline, then removes listeners, clears timers, and destroys streams. Continuous background output cannot extend drainage.
+- A private environment marker gates registration and is removed from Bash command environments. This is not a security boundary.
+
 ### `src/protocol.ts`
 
 - Incremental UTF-8 line buffering with a maximum pending-line size.
@@ -116,7 +125,7 @@ Requirements:
 - Set `detached: true` on POSIX so the child owns a process group.
 - Ignore stdin; pipe stdout/stderr.
 - Do not pass parent extension paths or session files.
-- Keep ambient extension and skill discovery disabled; add only the selected profile's validated explicit local capability paths with repeated CLI flags.
+- Keep ambient extension and skill discovery disabled; add the private Bash extension first for Bash-enabled profiles, followed by the selected profile's validated explicit local capability paths with repeated CLI flags.
 - Preserve only the environment needed for provider authentication and normal Pi operation. V1 may inherit the environment, but must overwrite any internal recursion/depth variables it introduces.
 
 ## Prompt assembly
@@ -223,7 +232,7 @@ Suggested defaults:
 - reviewer/oracle: 120 seconds
 - tester: 120 seconds for known-fast tools
 - worker: 120 seconds for known-fast tools
-- `bash`: bounded only by the run deadline in V1
+- `bash`: no package-supplied fast-tool deadline; the run deadline always applies. A Bash-supplied timeout ends the whole delegation with `tool_timeout`; a Bash abort ends it with `cancelled`.
 
 If protocol event names differ in the installed Pi version, verify against the official example and actual JSON-mode output before coding the timer.
 
@@ -291,6 +300,10 @@ Pi may execute multiple sibling delegate calls concurrently; tests must exercise
 ## Platform policy
 
 V1 officially supports macOS and Linux. On `win32`, fail before spawning with a concise message explaining that reliable process-tree termination is not implemented. Do not silently fall back to `child.kill()` and claim equivalent guarantees.
+
+## Containment limits
+
+Ordinary Bash descendants inherit the owned process group. Deliberate daemonization or separate process groups created by trusted custom extensions are not contained. Abrupt parent death is not Pi tool cancellation and does not guarantee immediate cleanup; no parent-death supervisor is provided.
 
 ## Security
 

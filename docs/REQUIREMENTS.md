@@ -172,10 +172,10 @@ V1 intentionally excludes:
 
 1. The extension installs as a Pi package and registers `delegate`.
 2. With no configuration, all five bundled profiles launch unchanged. User configuration can add, replace, or disable complete profiles; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
-3. Children run with no sessions, extension discovery, or skill discovery.
+3. Children run with no sessions, ambient extension discovery, or skill discovery. A package-private Bash lifecycle extension is explicitly loaded for Bash-enabled profiles.
 4. A clean child result is streamed and returned.
 5. Parent abort terminates the full POSIX process group within a bounded grace period.
-6. Wall-clock timeout terminates the full process group and returns a timeout failure.
+6. Wall-clock timeout terminates the full process group and returns a timeout failure. Bash-supplied timeout or abort ends the entire delegation and triggers the same cleanup; it must not leave the model continuing beside a surviving command.
 7. A descendant holding stdout/stderr open cannot keep the delegate tool pending indefinitely.
 8. A valid terminal answer survives forced post-settle cleanup.
 9. Buffers and returned output obey the documented limits.

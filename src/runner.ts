@@ -3,10 +3,17 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { Usage } from "@earendil-works/pi-ai";
 
 import type { DelegateProfile } from "./agents.ts";
+import {
+  DELEGATE_BASH_ABORT_EXIT_CODE,
+  DELEGATE_BASH_TIMEOUT_EXIT_CODE,
+  DELEGATE_CHILD_ENV,
+  DELEGATE_CHILD_ENV_VALUE,
+} from "./delegate-child-contract.ts";
 import { createProcessTreeController, type ProcessTreeController } from "./process-tree.ts";
 import {
   ProtocolLineTooLargeError,
@@ -21,6 +28,9 @@ const DEFAULT_CLEANUP_VERIFY_MS = 1_000;
 const DEFAULT_EXIT_DRAIN_MS = 250;
 const DEFAULT_SEMANTIC_DRAIN_MS = 250;
 const PIPE_CLOSE_VERIFY_MS = 50;
+const DELEGATE_BASH_EXTENSION_PATH = fileURLToPath(
+  new URL("./delegate-bash-extension.ts", import.meta.url),
+);
 
 function zeroNativeUsage(): Usage {
   return {
@@ -46,6 +56,7 @@ export type DelegateFailureCode =
   | "spawn_failed"
   | "cancelled"
   | "run_timeout"
+  | "tool_timeout"
   | "protocol_error"
   | "child_error"
   | "missing_terminal_answer";
@@ -373,6 +384,11 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     "--no-skills",
   ];
   for (const skill of options.profile.skills) childArgs.push("--skill", skill);
+  // Pi keeps the first extension registration for a tool name. Load the
+  // fail-closed Bash implementation before any configured extension.
+  if (options.profile.tools.includes("bash")) {
+    childArgs.push("--extension", DELEGATE_BASH_EXTENSION_PATH);
+  }
   for (const extension of options.profile.extensions) childArgs.push("--extension", extension);
   if (options.model) childArgs.push("--model", options.model);
   childArgs.push(
@@ -483,6 +499,34 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     const makeProcessOutcome = (cleanup: CleanupDetails): DelegateOutcome => {
       const durationMs = Date.now() - startedAt;
       const stderr = stderrTail.toString("utf8");
+      // Reserved child exits are lifecycle authority and must beat any
+      // terminal answer that happened to reach stdout first.
+      if (exitCode === DELEGATE_BASH_TIMEOUT_EXIT_CODE) {
+        return {
+          ok: false,
+          code: "tool_timeout",
+          message: `${profileLabel} ended because a Bash command exceeded its supplied timeout`,
+          durationMs,
+          stderr,
+          malformedLineCount: parser.state.malformedLineCount,
+          exitCode,
+          nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
+          cleanup,
+        };
+      }
+      if (exitCode === DELEGATE_BASH_ABORT_EXIT_CODE) {
+        return {
+          ok: false,
+          code: "cancelled",
+          message: `${profileLabel} ended because its Bash command was aborted`,
+          durationMs,
+          stderr,
+          malformedLineCount: parser.state.malformedLineCount,
+          exitCode,
+          nativeUsage: cloneNativeUsage(parser.state.nativeUsage),
+          cleanup,
+        };
+      }
       if (parser.state.assistantError) {
         return {
           ok: false,
@@ -637,7 +681,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       spawned = spawn(invocation.command, invocation.args, {
         cwd: options.cwd,
         detached: true,
-        env,
+        env: { ...env, [DELEGATE_CHILD_ENV]: DELEGATE_CHILD_ENV_VALUE },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });

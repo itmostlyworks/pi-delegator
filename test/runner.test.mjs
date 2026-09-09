@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
@@ -11,10 +14,23 @@ import {
   TESTER_PROFILE,
   WORKER_PROFILE,
 } from "../src/agents.ts";
+import {
+  DELEGATE_BASH_ABORT_EXIT_CODE,
+  DELEGATE_BASH_TIMEOUT_EXIT_CODE,
+  DELEGATE_CHILD_ENV,
+  DELEGATE_CHILD_ENV_VALUE,
+} from "../src/delegate-child-contract.ts";
 import { isSupportedPlatform, runDelegate } from "../src/runner.ts";
 
+const execFileAsync = promisify(execFile);
 const fixture = resolve("test/fixtures/fake-pi.mjs");
-await chmod(fixture, 0o755);
+const realPiBashFixture = resolve("test/fixtures/real-pi-bash-child.mjs");
+const bashDrainFixture = resolve("test/fixtures/bash-operation-drain-child.mjs");
+await Promise.all([
+  chmod(fixture, 0o755),
+  chmod(realPiBashFixture, 0o755),
+  chmod(bashDrainFixture, 0o755),
+]);
 
 async function withTempDir(fn) {
   const directory = await mkdtemp(join(tmpdir(), "pi-delegator-test-"));
@@ -44,6 +60,34 @@ async function waitForFile(path, timeoutMs = 500) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
   }
+}
+
+function pidExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForPidGone(pid, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (pidExists(pid)) {
+    if (Date.now() >= deadline) throw new Error(`process ${pid} still exists`);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+}
+
+function realPiBashEnv(scenario, descendantPidPath, resultPath) {
+  return {
+    ...process.env,
+    PI_DELEGATOR_PI_BINARY: realPiBashFixture,
+    REAL_PI_BASH_SCENARIO: scenario,
+    REAL_PI_BASH_DESCENDANT_PID_PATH: descendantPidPath,
+    REAL_PI_BASH_RESULT_PATH: resultPath,
+  };
 }
 
 test("returns a clean terminal answer and launches Scout with isolated arguments", async () => {
@@ -133,6 +177,15 @@ test("launches every fixed profile with isolated CLI contracts and outputs", asy
       assert.equal(args[args.indexOf("--model") + 1], "example/model");
       assert.equal(args[args.indexOf("--thinking") + 1], profile.thinking);
       assert.equal(args[args.indexOf("--tools") + 1], profile.tools.join(","));
+      const extensions = args.flatMap((argument, index) =>
+        argument === "--extension" ? [args[index + 1]] : []
+      );
+      if (profile.tools.includes("bash")) {
+        assert.equal(extensions.length, 1);
+        assert.match(extensions[0], /delegate-bash-extension\.ts$/);
+      } else {
+        assert.deepEqual(extensions, []);
+      }
       assert.equal(await readFile(promptContentPath, "utf8"), profile.systemPrompt);
     }
   });
@@ -196,6 +249,152 @@ test("loads only each concurrent profile's explicit capabilities and tool allowl
       assert.equal(args[args.indexOf("--tools") + 1].includes(sibling.tools[1]), false);
     }
   });
+});
+
+test("private Bash override keeps a normally completed background command in the delegate group", async () => {
+  await withTempDir(async (cwd) => {
+    const descendantPidPath = join(cwd, "bash-descendant.pid");
+    const resultPath = join(cwd, "bash-result.txt");
+    const result = await runDelegate({
+      profile: { ...REVIEWER_PROFILE, timeoutMs: 3_000 },
+      task: "Exercise real Bash",
+      cwd,
+      env: realPiBashEnv("background-complete", descendantPidPath, resultPath),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+      semanticDrainMs: 30,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "real Bash completed");
+    assert.equal(await readFile(resultPath, "utf8"), "(no output)");
+    const descendantPid = Number(await waitForFile(descendantPidPath));
+    await waitForPidGone(descendantPid);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.processExited, true);
+  });
+});
+
+test("Bash's supplied timeout ends delegation and its descendant", async () => {
+  await withTempDir(async (cwd) => {
+    const descendantPidPath = join(cwd, "bash-descendant.pid");
+    const result = await runDelegate({
+      profile: { ...REVIEWER_PROFILE, timeoutMs: 1_500 },
+      task: "Timeout real Bash",
+      cwd,
+      env: realPiBashEnv("own-timeout", descendantPidPath, join(cwd, "unused.txt")),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "tool_timeout");
+    assert.equal(result.exitCode, DELEGATE_BASH_TIMEOUT_EXIT_CODE);
+    const descendantPid = Number(await waitForFile(descendantPidPath));
+    await waitForPidGone(descendantPid);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.processExited, true);
+  });
+});
+
+test("Bash's own AbortSignal ends delegation and its descendant", async () => {
+  await withTempDir(async (cwd) => {
+    const descendantPidPath = join(cwd, "bash-descendant.pid");
+    const result = await runDelegate({
+      profile: { ...REVIEWER_PROFILE, timeoutMs: 1_500 },
+      task: "Abort real Bash",
+      cwd,
+      env: realPiBashEnv("own-abort", descendantPidPath, join(cwd, "unused.txt")),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "cancelled");
+    assert.equal(result.exitCode, DELEGATE_BASH_ABORT_EXIT_CODE);
+    const descendantPid = Number(await waitForFile(descendantPidPath));
+    await waitForPidGone(descendantPid);
+    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.cleanup.processExited, true);
+  });
+});
+
+test("a terminal candidate cannot hide Bash's reserved timeout exit", async () => {
+  await withTempDir(async (cwd) => {
+    const descendantPidPath = join(cwd, "bash-descendant.pid");
+    const result = await runDelegate({
+      profile: { ...REVIEWER_PROFILE, timeoutMs: 1_500 },
+      task: "Reject candidate before timeout",
+      cwd,
+      env: realPiBashEnv("candidate-then-timeout", descendantPidPath, join(cwd, "unused.txt")),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+      semanticDrainMs: 300,
+      exitDrainMs: 20,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "tool_timeout");
+    assert.equal(result.exitCode, DELEGATE_BASH_TIMEOUT_EXIT_CODE);
+    await waitForPidGone(Number(await waitForFile(descendantPidPath)));
+  });
+});
+
+test("private Bash operation bounds trailing inherited pipes and stops data callbacks", async () => {
+  const { stdout } = await execFileAsync(process.execPath, [
+    "--experimental-strip-types",
+    bashDrainFixture,
+  ], { timeout: 2_000 });
+  const result = JSON.parse(stdout);
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.settledAfterMs >= 75, "the exit drain guard should own settlement");
+  assert.ok(result.settledAfterMs < 250, "trailing pipe drainage must remain bounded");
+  assert.equal(result.callbacksAfterSettlement, 0);
+});
+
+test("actual Pi extension loader keeps the first conflicting Bash registration", async () => {
+  const privateExtension = resolve("src/delegate-bash-extension.ts");
+  const conflictExtension = resolve("test/fixtures/conflicting-bash-extension.ts");
+  const loaderUrl = pathToFileURL(resolve(
+    "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js",
+  )).href;
+  const runnerUrl = pathToFileURL(resolve(
+    "node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/runner.js",
+  )).href;
+  const [{ createExtensionRuntime, loadExtensions }, { ExtensionRunner }] = await Promise.all([
+    import(loaderUrl),
+    import(runnerUrl),
+  ]);
+  const previousMarker = process.env[DELEGATE_CHILD_ENV];
+  delete process.env[DELEGATE_CHILD_ENV];
+  try {
+    const ordinaryRuntime = createExtensionRuntime();
+    const ordinary = await loadExtensions(
+      [privateExtension, conflictExtension],
+      process.cwd(),
+      undefined,
+      ordinaryRuntime,
+    );
+    assert.deepEqual(ordinary.errors, []);
+    const ordinaryRunner = new ExtensionRunner(ordinary.extensions, ordinaryRuntime, process.cwd(), {}, {});
+    assert.match(ordinaryRunner.getToolDefinition("bash").description, /CONFLICTING_BASH_EXTENSION/);
+
+    process.env[DELEGATE_CHILD_ENV] = DELEGATE_CHILD_ENV_VALUE;
+    const runtime = createExtensionRuntime();
+    const loaded = await loadExtensions([privateExtension, conflictExtension], process.cwd(), undefined, runtime);
+    assert.deepEqual(loaded.errors, []);
+    const extensionRunner = new ExtensionRunner(loaded.extensions, runtime, process.cwd(), {}, {});
+    const bash = extensionRunner.getToolDefinition("bash");
+    assert.ok(bash);
+    assert.match(bash.description, /timeout or aborting Bash ends the entire delegation/);
+    assert.doesNotMatch(bash.description, /CONFLICTING_BASH_EXTENSION/);
+  } finally {
+    if (previousMarker === undefined) delete process.env[DELEGATE_CHILD_ENV];
+    else process.env[DELEGATE_CHILD_ENV] = previousMarker;
+  }
 });
 
 test("streams compact protocol progress data and aggregates usage", async () => {
