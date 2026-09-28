@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, delimiter, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Usage } from "@earendil-works/pi-ai";
@@ -10,11 +10,16 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type { DelegateProfile } from "./agents.ts";
 import {
   DELEGATE_BASH_ABORT_EXIT_CODE,
-  DELEGATE_BASH_TIMEOUT_EXIT_CODE,
+  DELEGATE_BASH_CLEANUP_EXIT_CODE,
   DELEGATE_CHILD_ENV,
   DELEGATE_CHILD_ENV_VALUE,
 } from "./delegate-child-contract.ts";
-import { createProcessTreeController, type ProcessTreeController } from "./process-tree.ts";
+import {
+  captureProcessSession,
+  createProcessSessionController,
+  createProcessTreeController,
+  type ProcessTreeController,
+} from "./process-tree.ts";
 import {
   ProtocolLineTooLargeError,
   ProtocolParser,
@@ -56,7 +61,7 @@ export type DelegateFailureCode =
   | "spawn_failed"
   | "cancelled"
   | "run_timeout"
-  | "tool_timeout"
+  | "cleanup_failed"
   | "protocol_error"
   | "child_error"
   | "missing_terminal_answer";
@@ -162,6 +167,23 @@ function getPiInvocation(args: string[], env: NodeJS.ProcessEnv): { command: str
   return { command: "pi", args };
 }
 
+// Resolve before the launch gate so missing/non-executable Pi binaries retain
+// spawn_failed semantics rather than looking like a child with no final answer.
+function resolveExecutable(command: string, cwd: string, env: NodeJS.ProcessEnv): string {
+  const candidates = command.includes("/")
+    ? [resolvePath(cwd, command)]
+    : (env.PATH ?? "/usr/bin:/bin").split(delimiter).map((path) => resolvePath(cwd, path, command));
+  for (const path of candidates) {
+    try {
+      accessSync(path, constants.X_OK);
+      if (statSync(path).isFile()) return path;
+    } catch {
+      // Keep searching PATH, including after a non-executable match.
+    }
+  }
+  throw new Error(`Executable not found or not executable: ${command}`);
+}
+
 function appendTail(current: Buffer, chunk: Buffer, maxBytes: number): Buffer {
   if (chunk.length >= maxBytes) return Buffer.from(chunk.subarray(chunk.length - maxBytes));
   const combined = current.length === 0 ? Buffer.from(chunk) : Buffer.concat([current, chunk]);
@@ -240,7 +262,7 @@ type PromptSetupOutcome =
 async function createTemporaryPromptWithinDeadline(
   profileName: string,
   promptText: string,
-  deadlineMs: number,
+  deadlineMs: number | null,
   signal: AbortSignal | undefined,
 ): Promise<PromptSetupOutcome> {
   const setup = createTemporaryPrompt(profileName, promptText);
@@ -252,7 +274,9 @@ async function createTemporaryPromptWithinDeadline(
   let timer: NodeJS.Timeout | undefined;
   let onAbort: (() => void) | undefined;
   const interruption = new Promise<PromptSetupOutcome>((resolveInterruption) => {
-    timer = setTimeout(() => resolveInterruption({ type: "run_timeout" }), Math.max(0, deadlineMs));
+    if (deadlineMs !== null) {
+      timer = setTimeout(() => resolveInterruption({ type: "run_timeout" }), Math.max(0, deadlineMs));
+    }
     if (signal) {
       onAbort = () => resolveInterruption({ type: "cancelled" });
       signal.addEventListener("abort", onAbort, { once: true });
@@ -275,7 +299,10 @@ async function createTemporaryPromptWithinDeadline(
 export async function runDelegate(options: RunDelegateOptions): Promise<DelegateOutcome> {
   const startedAt = Date.now();
   const env = options.env ?? process.env;
-  const timeoutMs = Math.min(options.profile.timeoutMs, options.timeoutMs ?? options.profile.timeoutMs);
+  const configuredTimeout = options.profile.timeoutMs;
+  const timeoutMs = options.timeoutMs === undefined
+    ? configuredTimeout
+    : Math.min(configuredTimeout ?? options.timeoutMs, options.timeoutMs);
   const profileLabel = `${options.profile.name.charAt(0).toUpperCase()}${options.profile.name.slice(1)}`;
 
   if (!isSupportedPlatform(process.platform)) {
@@ -306,11 +333,11 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     };
   }
 
-  const deadlineAt = startedAt + timeoutMs;
+  const deadlineAt = timeoutMs === null ? null : startedAt + timeoutMs;
   const promptSetup = await createTemporaryPromptWithinDeadline(
     options.profile.name,
     options.profile.systemPrompt,
-    deadlineAt - Date.now(),
+    deadlineAt === null ? null : deadlineAt - Date.now(),
     options.signal,
   );
   if (promptSetup.type !== "ready") {
@@ -345,7 +372,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
   }
   const temporaryPrompt = promptSetup.prompt;
 
-  if (Date.now() >= deadlineAt) {
+  if (deadlineAt !== null && Date.now() >= deadlineAt) {
     await removeTemporaryPrompt(temporaryPrompt.directory);
     return {
       ok: false,
@@ -385,7 +412,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
   ];
   for (const skill of options.profile.skills) childArgs.push("--skill", skill);
   // Pi keeps the first extension registration for a tool name. Load the
-  // fail-closed Bash implementation before any configured extension.
+  // session-owned Bash implementation before any configured extension.
   if (options.profile.tools.includes("bash")) {
     childArgs.push("--extension", DELEGATE_BASH_EXTENSION_PATH);
   }
@@ -481,7 +508,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
         return;
       }
       if (semanticDrainTimer) return;
-      if (Date.now() >= deadlineAt) {
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
         void finalize({ type: "run_timeout" });
         return;
       }
@@ -501,11 +528,11 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       const stderr = stderrTail.toString("utf8");
       // Reserved child exits are lifecycle authority and must beat any
       // terminal answer that happened to reach stdout first.
-      if (exitCode === DELEGATE_BASH_TIMEOUT_EXIT_CODE) {
+      if (exitCode === DELEGATE_BASH_CLEANUP_EXIT_CODE || cleanup.diagnostic) {
         return {
           ok: false,
-          code: "tool_timeout",
-          message: `${profileLabel} ended because a Bash command exceeded its supplied timeout`,
+          code: "cleanup_failed",
+          message: `${profileLabel} could not safely contain or clean up its subprocesses${cleanup.diagnostic ? `: ${cleanup.diagnostic}` : ""}`,
           durationMs,
           stderr,
           malformedLineCount: parser.state.malformedLineCount,
@@ -578,6 +605,8 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       options.signal?.removeEventListener("abort", onAbort);
 
       const pipesNeededForcing = child !== undefined && !pipesClosed;
+      // Close the launch gate before cleanup: cancelled startup must never exec Pi.
+      child?.stdin?.destroy();
       const termination = await processTree?.terminate();
       child?.stdout?.destroy();
       child?.stderr?.destroy();
@@ -678,12 +707,17 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
     const invocation = getPiInvocation(childArgs, env);
     let spawned: ChildProcess;
     try {
-      spawned = spawn(invocation.command, invocation.args, {
+      // The short-lived gate holds the new session alive until its identity is
+      // captured, then exec replaces it with Pi. No user command is interpolated.
+      spawned = spawn("/bin/sh", [
+        "-p", "-c", 'IFS= read -r permit && [ "$permit" = go ] && exec "$@"',
+        "pi-delegator-launch", resolveExecutable(invocation.command, options.cwd, env), ...invocation.args,
+      ], {
         cwd: options.cwd,
         detached: true,
         env: { ...env, [DELEGATE_CHILD_ENV]: DELEGATE_CHILD_ENV_VALUE },
         shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
       child = spawned;
       if (spawned.pid !== undefined) {
@@ -696,6 +730,30 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       void finalize({ type: "spawn_failed", error });
       return;
     }
+
+    spawned.stdin?.on("error", (error) => {
+      if (!finalizing) void finalize({ type: "spawn_failed", error });
+    });
+
+    spawned.once("spawn", () => {
+      if (finalizing || spawned.pid === undefined) return;
+      try {
+        const session = captureProcessSession(spawned.pid);
+        processTree = createProcessSessionController(session, {
+          termGraceMs: cleanupGraceMs,
+          killVerifyMs: cleanupVerifyMs,
+        });
+        if (options.signal?.aborted) {
+          void finalize({ type: "cancelled" });
+        } else if (deadlineAt !== null && Date.now() >= deadlineAt) {
+          void finalize({ type: "run_timeout" });
+        } else {
+          spawned.stdin?.end("go\n");
+        }
+      } catch (error) {
+        void finalize({ type: "spawn_failed", error });
+      }
+    });
 
     spawned.stdout?.on("data", (data: Buffer) => {
       if (!acceptingOutput) return;
@@ -730,9 +788,11 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
       settleFromProcess(false);
     });
 
-    runTimer = setTimeout(() => {
-      void finalize(semanticCompletionObserved ? { type: "semantic_done" } : { type: "run_timeout" });
-    }, Math.max(0, deadlineAt - Date.now()));
+    if (deadlineAt !== null) {
+      runTimer = setTimeout(() => {
+        void finalize(semanticCompletionObserved ? { type: "semantic_done" } : { type: "run_timeout" });
+      }, Math.max(0, deadlineAt - Date.now()));
+    }
     if (options.signal) {
       options.signal.addEventListener("abort", onAbort, { once: true });
       if (options.signal.aborted) onAbort();

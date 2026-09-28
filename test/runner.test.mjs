@@ -16,7 +16,7 @@ import {
 } from "../src/agents.ts";
 import {
   DELEGATE_BASH_ABORT_EXIT_CODE,
-  DELEGATE_BASH_TIMEOUT_EXIT_CODE,
+  DELEGATE_BASH_CLEANUP_EXIT_CODE,
   DELEGATE_CHILD_ENV,
   DELEGATE_CHILD_ENV_VALUE,
 } from "../src/delegate-child-contract.ts";
@@ -26,10 +26,12 @@ const execFileAsync = promisify(execFile);
 const fixture = resolve("test/fixtures/fake-pi.mjs");
 const realPiBashFixture = resolve("test/fixtures/real-pi-bash-child.mjs");
 const bashDrainFixture = resolve("test/fixtures/bash-operation-drain-child.mjs");
+const cleanupExitFixture = resolve("test/fixtures/cleanup-exit-child.mjs");
 await Promise.all([
   chmod(fixture, 0o755),
   chmod(realPiBashFixture, 0o755),
   chmod(bashDrainFixture, 0o755),
+  chmod(cleanupExitFixture, 0o755),
 ]);
 
 async function withTempDir(fn) {
@@ -138,6 +140,24 @@ test("returns a clean terminal answer and launches Scout with isolated arguments
     const promptIndex = args.indexOf("--append-system-prompt");
     assert.notEqual(promptIndex, -1);
     await assert.rejects(readFile(args[promptIndex + 1], "utf8"));
+  });
+});
+
+test("the launch gate ignores inherited shell functions", async () => {
+  await withTempDir(async (cwd) => {
+    const result = await runDelegate({
+      profile: SCOUT_PROFILE,
+      task: "Launch without shell function overrides",
+      cwd,
+      env: fixtureEnv("clean", {
+        "BASH_FUNC_read%%": "() { permit=go; }",
+        "BASH_FUNC_exec%%": "() { exit 99; }",
+      }),
+      cleanupGraceMs: 50,
+      exitDrainMs: 20,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "Scout result");
   });
 });
 
@@ -256,7 +276,7 @@ test("private Bash override keeps a normally completed background command in the
     const descendantPidPath = join(cwd, "bash-descendant.pid");
     const resultPath = join(cwd, "bash-result.txt");
     const result = await runDelegate({
-      profile: { ...REVIEWER_PROFILE, timeoutMs: 3_000 },
+      profile: REVIEWER_PROFILE,
       task: "Exercise real Bash",
       cwd,
       env: realPiBashEnv("background-complete", descendantPidPath, resultPath),
@@ -276,12 +296,12 @@ test("private Bash override keeps a normally completed background command in the
   });
 });
 
-test("Bash's supplied timeout ends delegation and its descendant", async () => {
+test("Bash's supplied timeout is a recoverable Pi tool error after command cleanup", async () => {
   await withTempDir(async (cwd) => {
     const descendantPidPath = join(cwd, "bash-descendant.pid");
     const result = await runDelegate({
-      profile: { ...REVIEWER_PROFILE, timeoutMs: 1_500 },
-      task: "Timeout real Bash",
+      profile: REVIEWER_PROFILE,
+      task: "Recover from real Bash timeout",
       cwd,
       env: realPiBashEnv("own-timeout", descendantPidPath, join(cwd, "unused.txt")),
       cleanupGraceMs: 100,
@@ -289,12 +309,9 @@ test("Bash's supplied timeout ends delegation and its descendant", async () => {
       exitDrainMs: 20,
     });
 
-    assert.equal(result.ok, false);
-    assert.equal(result.code, "tool_timeout");
-    assert.equal(result.exitCode, DELEGATE_BASH_TIMEOUT_EXIT_CODE);
-    const descendantPid = Number(await waitForFile(descendantPidPath));
-    await waitForPidGone(descendantPid);
-    assert.equal(result.cleanup.termSent, true);
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "recovered after Bash timeout");
+    await waitForPidGone(Number(await waitForFile(descendantPidPath)));
     assert.equal(result.cleanup.processExited, true);
   });
 });
@@ -303,7 +320,7 @@ test("Bash's own AbortSignal ends delegation and its descendant", async () => {
   await withTempDir(async (cwd) => {
     const descendantPidPath = join(cwd, "bash-descendant.pid");
     const result = await runDelegate({
-      profile: { ...REVIEWER_PROFILE, timeoutMs: 1_500 },
+      profile: REVIEWER_PROFILE,
       task: "Abort real Bash",
       cwd,
       env: realPiBashEnv("own-abort", descendantPidPath, join(cwd, "unused.txt")),
@@ -322,24 +339,106 @@ test("Bash's own AbortSignal ends delegation and its descendant", async () => {
   });
 });
 
-test("a terminal candidate cannot hide Bash's reserved timeout exit", async () => {
+test("a terminal candidate cannot hide Bash's reserved cleanup failure exit", async () => {
   await withTempDir(async (cwd) => {
-    const descendantPidPath = join(cwd, "bash-descendant.pid");
     const result = await runDelegate({
-      profile: { ...REVIEWER_PROFILE, timeoutMs: 1_500 },
-      task: "Reject candidate before timeout",
+      profile: REVIEWER_PROFILE,
+      task: "Reject candidate before containment failure",
       cwd,
-      env: realPiBashEnv("candidate-then-timeout", descendantPidPath, join(cwd, "unused.txt")),
+      env: { ...process.env, PI_DELEGATOR_PI_BINARY: cleanupExitFixture },
       cleanupGraceMs: 100,
-      cleanupVerifyMs: 200,
       semanticDrainMs: 300,
       exitDrainMs: 20,
     });
 
     assert.equal(result.ok, false);
-    assert.equal(result.code, "tool_timeout");
-    assert.equal(result.exitCode, DELEGATE_BASH_TIMEOUT_EXIT_CODE);
-    await waitForPidGone(Number(await waitForFile(descendantPidPath)));
+    assert.equal(result.code, "cleanup_failed");
+    assert.equal(result.exitCode, DELEGATE_BASH_CLEANUP_EXIT_CODE);
+  });
+});
+
+test("an earlier background service survives command timeout but not outer completion", async () => {
+  await withTempDir(async (cwd) => {
+    const commandPidPath = join(cwd, "command.pid");
+    const servicePidPath = join(cwd, "service.pid");
+    const result = await runDelegate({
+      profile: REVIEWER_PROFILE,
+      task: "Keep prior service through recovery",
+      cwd,
+      env: realPiBashEnv("background-then-timeout", commandPidPath, servicePidPath),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+      semanticDrainMs: 30,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "recovered after Bash timeout");
+    await waitForPidGone(Number(await waitForFile(commandPidPath)));
+    await waitForPidGone(Number(await waitForFile(servicePidPath)));
+  });
+});
+
+test("cancellation after command timeout cleans an earlier surviving background service", async () => {
+  await withTempDir(async (cwd) => {
+    const commandPidPath = join(cwd, "command.pid");
+    const servicePidPath = join(cwd, "service.pid");
+    const controller = new AbortController();
+    const run = runDelegate({
+      profile: REVIEWER_PROFILE,
+      task: "Cancel after retry",
+      cwd,
+      signal: controller.signal,
+      env: realPiBashEnv("background-then-timeout-cancel", commandPidPath, servicePidPath),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+    });
+    await waitForFile(`${servicePidPath}.ready`, 2_500);
+    const servicePid = Number(await readFile(servicePidPath, "utf8"));
+    assert.equal(pidExists(servicePid), true);
+    controller.abort();
+    const result = await run;
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "cancelled");
+    await waitForPidGone(servicePid);
+    await waitForPidGone(Number(await readFile(commandPidPath, "utf8")));
+  });
+});
+
+test("parent cancellation during Bash timeout cleanup cannot recover to success without a deadline", async () => {
+  await withTempDir(async (cwd) => {
+    const pidPath = join(cwd, "command.pid");
+    const controller = new AbortController();
+    const run = runDelegate({
+      profile: REVIEWER_PROFILE,
+      task: "Cancel during command timeout",
+      cwd,
+      signal: controller.signal,
+      env: realPiBashEnv("timeout-under-parent-interruption", pidPath, join(cwd, "unused.txt")),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+    });
+    await waitForFile(pidPath, 1_500);
+    setTimeout(() => controller.abort(), 90);
+    const result = await run;
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "cancelled");
+    await waitForPidGone(Number(await readFile(pidPath, "utf8")));
+  });
+});
+
+test("an opted-in run deadline covers Bash timeout cleanup and recovery", async () => {
+  await withTempDir(async (cwd) => {
+    const pidPath = join(cwd, "command.pid");
+    const result = await runDelegate({
+      profile: { ...REVIEWER_PROFILE, timeoutMs: 1_800 },
+      task: "Deadline includes command cleanup",
+      cwd,
+      env: realPiBashEnv("timeout-under-parent-interruption", pidPath, join(cwd, "unused.txt")),
+      cleanupGraceMs: 100,
+      cleanupVerifyMs: 200,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "run_timeout");
+    await waitForPidGone(Number(await waitForFile(pidPath)));
   });
 });
 
@@ -389,7 +488,7 @@ test("actual Pi extension loader keeps the first conflicting Bash registration",
     const extensionRunner = new ExtensionRunner(loaded.extensions, runtime, process.cwd(), {}, {});
     const bash = extensionRunner.getToolDefinition("bash");
     assert.ok(bash);
-    assert.match(bash.description, /timeout or aborting Bash ends the entire delegation/);
+    assert.match(bash.description, /timeout stops this command group and returns a recoverable tool error/);
     assert.doesNotMatch(bash.description, /CONFLICTING_BASH_EXTENSION/);
   } finally {
     if (previousMarker === undefined) delete process.env[DELEGATE_CHILD_ENV];
@@ -471,7 +570,7 @@ test("progress callback failures do not decide lifecycle", async () => {
   });
 });
 
-test("private test timeout can shorten but cannot lengthen the profile deadline", async () => {
+test("private test deadline can shorten but cannot lengthen a configured deadline", async () => {
   await withTempDir(async (cwd) => {
     const shortened = await runDelegate({
       profile: { ...SCOUT_PROFILE, timeoutMs: 1_000 },
@@ -628,19 +727,19 @@ test("wall-clock timeout signals the child and settles within cleanup grace", as
   });
 });
 
-test("wall-clock deadline includes startup and can prevent launch", async () => {
+test("without a run deadline a delayed terminal answer succeeds", async () => {
   await withTempDir(async (cwd) => {
-    const recordPath = join(cwd, "args.json");
+    assert.equal(SCOUT_PROFILE.timeoutMs, null);
     const result = await runDelegate({
-      profile: { ...SCOUT_PROFILE, timeoutMs: 0 },
-      task: "Do not launch",
+      profile: SCOUT_PROFILE,
+      task: "Wait for useful work",
       cwd,
-      env: fixtureEnv("clean", { FAKE_PI_RECORD_PATH: recordPath }),
+      env: fixtureEnv("delayed-clean", { FAKE_PI_DELAY_MS: "400" }),
+      exitDrainMs: 20,
     });
-
-    assert.equal(result.ok, false);
-    assert.equal(result.code, "run_timeout");
-    await assert.rejects(readFile(recordPath, "utf8"));
+    assert.equal(result.ok, true);
+    assert.equal(result.text, "delayed result");
+    assert.ok(result.durationMs >= 350);
   });
 });
 
@@ -675,6 +774,7 @@ test("parent cancellation signals an active child and settles once", async () =>
   await withTempDir(async (cwd) => {
     const signalPath = join(cwd, "signals.txt");
     const controller = new AbortController();
+    assert.equal(SCOUT_PROFILE.timeoutMs, null);
     const run = runDelegate({
       profile: SCOUT_PROFILE,
       task: "Cancel",

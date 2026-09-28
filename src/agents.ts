@@ -22,8 +22,8 @@ export interface DelegateProfile {
   readonly skills: readonly string[];
   readonly extensions: readonly string[];
   readonly thinking: DelegateThinkingLevel;
-  /** Internal runner name for the configured deadline. */
-  readonly timeoutMs: number;
+  /** Internal runner name for an optional user-configured run deadline. */
+  readonly timeoutMs: number | null;
   readonly systemPrompt: string;
 }
 
@@ -36,7 +36,10 @@ function loadPrompt(name: (typeof DELEGATE_AGENT_NAMES)[number]): string {
 }
 
 export function createDelegateProfile(options: DelegateProfile): DelegateProfile {
-  if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0) {
+  if (
+    options.timeoutMs !== null &&
+    (!Number.isInteger(options.timeoutMs) || options.timeoutMs <= 0 || options.timeoutMs > 2_147_483_647)
+  ) {
     throw new Error(`Delegate profile ${options.name} has an invalid deadline`);
   }
   if (options.tools.length === 0 || new Set(options.tools).size !== options.tools.length) {
@@ -55,7 +58,6 @@ function bundledProfile(
   description: string,
   tools: readonly string[],
   thinking: DelegateThinkingLevel,
-  timeoutMs: number,
 ): DelegateProfile {
   return createDelegateProfile({
     name,
@@ -65,7 +67,7 @@ function bundledProfile(
     skills: [],
     extensions: [],
     thinking,
-    timeoutMs,
+    timeoutMs: null,
     systemPrompt: loadPrompt(name),
   });
 }
@@ -75,7 +77,6 @@ export const SCOUT_PROFILE = bundledProfile(
   "Fast local codebase reconnaissance",
   ["read", "grep", "find", "ls"],
   "low",
-  180_000,
 );
 
 export const REVIEWER_PROFILE = bundledProfile(
@@ -83,7 +84,6 @@ export const REVIEWER_PROFILE = bundledProfile(
   "Fresh-context correctness and maintainability review",
   ["read", "grep", "find", "ls", "bash"],
   "high",
-  600_000,
 );
 
 export const ORACLE_PROFILE = bundledProfile(
@@ -91,7 +91,6 @@ export const ORACLE_PROFILE = bundledProfile(
   "Challenge assumptions and advise on material decisions",
   ["read", "grep", "find", "ls"],
   "high",
-  600_000,
 );
 
 export const TESTER_PROFILE = bundledProfile(
@@ -99,7 +98,6 @@ export const TESTER_PROFILE = bundledProfile(
   "Exercise a feature's real behavior and report evidence",
   ["read", "grep", "find", "ls", "bash"],
   "high",
-  1_200_000,
 );
 
 export const WORKER_PROFILE = bundledProfile(
@@ -107,7 +105,6 @@ export const WORKER_PROFILE = bundledProfile(
   "Implement one clearly bounded task",
   ["read", "grep", "find", "ls", "bash", "edit", "write"],
   "high",
-  1_200_000,
 );
 
 export const BUNDLED_PROFILES: DelegateProfileRegistry = Object.freeze({

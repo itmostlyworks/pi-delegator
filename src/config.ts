@@ -28,8 +28,8 @@ export const MAX_MODEL_BYTES = 256;
 export const MAX_PROFILE_NAME_BYTES = 64;
 export const MAX_DESCRIPTION_BYTES = 512;
 export const MAX_PROMPT_BYTES = 64 * 1024;
-export const MAX_PROFILE_DEADLINE_MS = 20 * 60 * 1_000;
-const PROFILE_FIELDS = [
+export const MAX_PROFILE_DEADLINE_MS = 2_147_483_647;
+const REQUIRED_PROFILE_FIELDS = [
   "description",
   "model",
   "thinking",
@@ -37,8 +37,8 @@ const PROFILE_FIELDS = [
   "tools",
   "skills",
   "extensions",
-  "deadlineMs",
 ] as const;
+const PROFILE_FIELDS = [...REQUIRED_PROFILE_FIELDS, "deadlineMs"] as const;
 const PROFILE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
 const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/u;
 const REMOTE_CAPABILITY_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:/u;
@@ -296,9 +296,9 @@ function parseProfile(path: string, profileName: string, value: unknown): Delega
       throw profileError(path, profileName, `has unknown field ${JSON.stringify(field)}`, `remove ${JSON.stringify(field)} and provide only ${PROFILE_FIELDS.join(", ")}`);
     }
   }
-  for (const field of PROFILE_FIELDS) {
+  for (const field of REQUIRED_PROFILE_FIELDS) {
     if (!Object.hasOwn(value, field)) {
-      throw profileError(path, profileName, `is incomplete; missing ${JSON.stringify(field)}`, `provide the complete fields ${PROFILE_FIELDS.join(", ")}`);
+      throw profileError(path, profileName, `is incomplete; missing ${JSON.stringify(field)}`, `provide the complete fields ${REQUIRED_PROFILE_FIELDS.join(", ")}`);
     }
   }
 
@@ -320,11 +320,12 @@ function parseProfile(path: string, profileName: string, value: unknown): Delega
     throw profileError(path, profileName, `thinking must be one of ${DELEGATE_THINKING_LEVELS.join(", ")}`, "choose a supported thinking level");
   }
   if (
-    !Number.isSafeInteger(value.deadlineMs) ||
-    (value.deadlineMs as number) <= 0 ||
-    (value.deadlineMs as number) > MAX_PROFILE_DEADLINE_MS
+    value.deadlineMs != null &&
+    (!Number.isInteger(value.deadlineMs) ||
+      (value.deadlineMs as number) <= 0 ||
+      (value.deadlineMs as number) > MAX_PROFILE_DEADLINE_MS)
   ) {
-    throw profileError(path, profileName, `deadlineMs must be a positive integer no greater than ${MAX_PROFILE_DEADLINE_MS}`, "choose a bounded deadline within the package ceiling");
+    throw profileError(path, profileName, `deadlineMs must be null or a positive integer no greater than ${MAX_PROFILE_DEADLINE_MS}`, "set deadlineMs to null, omit it, or choose a supported timer duration");
   }
 
   return createDelegateProfile({
@@ -336,7 +337,7 @@ function parseProfile(path: string, profileName: string, value: unknown): Delega
     tools: parseTools(path, profileName, value.tools),
     skills: parseCapabilities(path, profileName, "skills", value.skills),
     extensions: parseCapabilities(path, profileName, "extensions", value.extensions),
-    timeoutMs: value.deadlineMs as number,
+    timeoutMs: (value.deadlineMs as number | null | undefined) ?? null,
   });
 }
 

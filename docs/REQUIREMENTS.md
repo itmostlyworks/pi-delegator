@@ -1,6 +1,6 @@
 # Product requirements
 
-> Target contract: the lifecycle priorities below are approved, but not yet implemented. The current runtime still enforces profile deadlines and ends the delegation on a Bash timeout. See `README.md` for current behavior and `docs/IMPLEMENTATION.md` for the transition work.
+> Optional deadlines and Bash command recovery are implemented locally, not yet released on npm. Native macOS session-key behavior and live provider calls remain unverified.
 
 ## Problem
 
@@ -58,7 +58,7 @@ Rules:
 - `cwd` defaults to the parent context's cwd and must resolve to an existing directory.
 - `model`, when supplied, is a bounded Pi model selector passed to the child; otherwise the effective profile's model is used when non-null, then the parent model.
 - Thinking is not exposed to the calling agent. It comes from the effective profile; Pi may clamp it to the selected model's capabilities.
-- Overall deadlines require explicit user opt-in; bundled profiles do not impose them. The configuration interface and migration from existing `deadlineMs` values remain design work, not a new model-facing input in this revision.
+- Overall deadlines require explicit user opt-in; bundled profiles do not impose them. Configured `deadlineMs` omitted or `null` disables the timer; explicit existing positive values remain active. There is no model-facing deadline input.
 - Unknown fields and names outside the immutable effective registry are rejected by the schema.
 - There are no generic per-call prompt or tool override fields. Profiles continue to own role authority and tool access.
 
@@ -108,7 +108,7 @@ Bundled profile models are null, so the child inherits the parent model unless t
 
 ## User profile configuration
 
-The bounded user document at the Pi agent directory's `pi-delegator.json` contains a `profiles` map. Each name maps to `null`, which disables it, or a complete definition containing `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, and `extensions`. The current implementation also requires `deadlineMs`; the target representation of optional deadlines and migration of existing explicit user values must be designed before changing configuration parsing. Definitions replace whole profiles; there is no inheritance or field merging. Prompt and capability paths resolve relative to the source document. Skills identify explicit local Markdown files or directories, and extensions identify explicit local JavaScript or TypeScript files. Capability paths are canonicalized and must be readable, supported, and unique; remote sources and pi-delegator itself are rejected before launch.
+The bounded user document at the Pi agent directory's `pi-delegator.json` contains a `profiles` map. Each name maps to `null`, which disables it, or a complete definition containing `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, and `extensions`. `deadlineMs` is optional: omitted or `null` disables the timer; an explicit positive integer retains its safeguard, up to 2,147,483,647 ms (Node's timer maximum). All other definition fields remain required. Definitions replace whole profiles; there is no inheritance or field merging. Prompt and capability paths resolve relative to the source document. Skills identify explicit local Markdown files or directories, and extensions identify explicit local JavaScript or TypeScript files. Capability paths are canonicalized and must be readable, supported, and unique; remote sources and pi-delegator itself are rejected before launch.
 
 Configuration is immutable for each session. Trusted projects may provide the same document at `.pi/pi-delegator.json`; complete project entries replace or disable user and bundled entries. Invalid, incomplete, legacy, or unsafe sources prevent registration and identify the source, affected profile, and corrective action. Tool lists cannot enable nested `delegate` calls. Any optional deadline must be validated against supported timer limits rather than imposing a role-based work budget. Untrusted project documents are ignored, and delegate-call working directories never participate in profile discovery.
 
@@ -149,7 +149,7 @@ Failures must distinguish at least:
 - child/model error
 - malformed or oversized protocol output that prevents trustworthy completion
 
-Return bounded stderr and protocol diagnostics. Never disguise cancellation, an overall deadline expiry, or unsafe cleanup as ordinary successful completion. A command timeout must instead be visible to the delegate as a tool error, with continuation allowed after cleanup. This does not authorize silently stopping unrelated commands or earlier background services; cleanup isolation remains a design requirement to resolve before implementation.
+Return bounded stderr and protocol diagnostics. Never disguise cancellation, an overall deadline expiry, or unsafe cleanup as ordinary successful completion. A command timeout must instead be visible to the delegate as a tool error, with continuation allowed after cleanup. This does not authorize silently stopping unrelated commands or earlier background services; command-local cleanup targets only the timed-out job's group; earlier background groups remain until whole-session cleanup.
 
 ## Output limits
 
@@ -187,12 +187,12 @@ V1 intentionally excludes:
 2. With no configuration, all five bundled profiles retain their roles and tool access, without mandatory run deadlines. User configuration can add, replace, or disable complete profiles; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
 3. Children run with no sessions, ambient extension discovery, or skill discovery. A package-private Bash lifecycle extension is explicitly loaded for Bash-enabled profiles.
 4. A clean child result is streamed and returned.
-5. Parent abort terminates the full POSIX process group within a bounded grace period.
-6. A supplied Bash timeout cleans up the affected command and returns a recoverable tool error; the same delegate can run another command and produce a valid final answer. Ordinary nonzero command exits are also recoverable. Unsafe cleanup must be surfaced explicitly, not hidden by continuation.
-7. After child exit or semantic completion, a descendant holding stdout/stderr open cannot keep the delegate tool pending indefinitely.
+5. Parent abort scans and terminates live groups in the owned POSIX session within bounded cleanup windows.
+6. A supplied Bash timeout cleans up and verifies the affected job PGID and returns a recoverable Pi tool error; the same delegate can run another command and produce a valid final answer. Earlier background job groups are not terminated by command-local cleanup. Ordinary nonzero command exits are recoverable; unsafe cleanup is `cleanup_failed`, while parent abort remains terminal.
+7. After child exit or semantic completion, a descendant holding stdout/stderr open cannot keep the delegate tool pending indefinitely; whole-session cleanup scans same-session groups, including earlier background jobs.
 8. A valid terminal answer survives forced post-settle cleanup.
 9. Buffers and returned output obey the documented limits.
 10. Parallel delegate calls do not share mutable run state.
 11. Unit/integration tests cover the lifecycle matrix in `docs/IMPLEMENTATION.md`.
 12. Typecheck and tests pass with documented commands.
-13. An explicitly enabled overall deadline terminates the delegate and its owned subprocesses and returns a timeout failure; command recovery cannot extend it. Without opt-in, no overall run timer is armed.
+13. An explicitly configured overall deadline terminates the delegate and its owned same-session groups and returns a run timeout; command recovery cannot extend it. Without opt-in, no overall run timer is armed. `ps sess` identity must be distinct and unmasked or launch fails early; deliberate session escape is excluded.

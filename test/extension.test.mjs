@@ -152,7 +152,7 @@ test("renders selected delegate model and thinking metadata without changing res
   assert.deepEqual(content, [{ type: "text", text: Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") }]);
 });
 
-test("fixed profiles expose their documented thinking, deadlines, and tools", () => {
+test("fixed profiles expose their thinking, no default deadlines, and tools", () => {
   assert.deepEqual(
     [SCOUT_PROFILE, REVIEWER_PROFILE, ORACLE_PROFILE, TESTER_PROFILE, WORKER_PROFILE].map((profile) => ({
       name: profile.name,
@@ -161,11 +161,11 @@ test("fixed profiles expose their documented thinking, deadlines, and tools", ()
       tools: [...profile.tools],
     })),
     [
-      { name: "scout", thinking: "low", timeoutMs: 180_000, tools: ["read", "grep", "find", "ls"] },
-      { name: "reviewer", thinking: "high", timeoutMs: 600_000, tools: ["read", "grep", "find", "ls", "bash"] },
-      { name: "oracle", thinking: "high", timeoutMs: 600_000, tools: ["read", "grep", "find", "ls"] },
-      { name: "tester", thinking: "high", timeoutMs: 1_200_000, tools: ["read", "grep", "find", "ls", "bash"] },
-      { name: "worker", thinking: "high", timeoutMs: 1_200_000, tools: ["read", "grep", "find", "ls", "bash", "edit", "write"] },
+      { name: "scout", thinking: "low", timeoutMs: null, tools: ["read", "grep", "find", "ls"] },
+      { name: "reviewer", thinking: "high", timeoutMs: null, tools: ["read", "grep", "find", "ls", "bash"] },
+      { name: "oracle", thinking: "high", timeoutMs: null, tools: ["read", "grep", "find", "ls"] },
+      { name: "tester", thinking: "high", timeoutMs: null, tools: ["read", "grep", "find", "ls", "bash"] },
+      { name: "worker", thinking: "high", timeoutMs: null, tools: ["read", "grep", "find", "ls", "bash", "edit", "write"] },
     ],
   );
   assert.equal(REVIEWER_PROFILE.tools.includes("edit"), false);

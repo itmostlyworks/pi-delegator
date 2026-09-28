@@ -9,7 +9,7 @@ parent Pi
   └─ delegate tool
       ├─ resolve one immutable effective profile
       ├─ build explicit child CLI arguments
-      ├─ spawn fresh Pi process in its own POSIX process group
+      ├─ spawn a detached `/bin/sh` gate and exec Pi in an owned POSIX session
       ├─ parse bounded JSONL events
       ├─ stream compact progress
       └─ finalize once with result, failure, or forced cleanup
@@ -17,7 +17,7 @@ parent Pi
 
 There is no manager process, worker-script DSL, run registry, or persistence layer. Recovery here means the same running delegate may retry or adapt after a failed/timed-out subcommand; it is not package-orchestrated whole-run retry.
 
-**Target contract, not current behavior:** This document describes the approved direction. The current implementation still has fixed profile run deadlines and treats Bash timeout/abort as fatal to the delegate. `README.md` documents current behavior separately; `docs/REQUIREMENTS.md` defines the target contract. This documentation-only change does not alter runtime or settle the pending API and process-ownership design.
+**Implementation status:** Optional deadlines and command recovery are implemented locally but not yet released on npm. Native macOS `ps sess` behavior and live provider execution remain unverified.
 
 ## Suggested modules
 
@@ -41,7 +41,7 @@ There is no manager process, worker-script DSL, run registry, or persistence lay
 ### `src/config.ts`
 
 - Reads bounded user and trusted-project sources once per session.
-- Validates complete profile replacements, disables, prompt files, tools, thinking, models, and any explicitly configured run deadline. The optional deadline representation and migration rules remain undecided.
+- Validates complete profile replacements, disables, prompt files, tools, thinking, models, and any explicitly configured run deadline. Omitted or `null` `deadlineMs` disables the timer; existing explicit positive values remain active through 2,147,483,647 ms.
 - Resolves project entries over user and bundled profiles without inheritance or field merging.
 - Returns a deeply immutable effective registry; delegate-call working directories never affect discovery.
 
@@ -56,7 +56,7 @@ interface DelegateProfile {
   skills: readonly string[];
   extensions: readonly string[];
   thinking: ThinkingLevel;
-  // Run deadline is optional in the target contract; field/default/migration design pending.
+  timeoutMs: number | null; // null by default; configured from optional deadlineMs
   systemPrompt: string;
 }
 ```
@@ -73,9 +73,9 @@ interface DelegateProfile {
 ### `src/delegate-bash-extension.ts`
 
 - Private child-only extension loaded before configured extensions: Pi uses the first registration for each tool name.
-- Currently wraps Pi's public `createBashTool` with `BashOperations` that spawn shells with `detached: false`, preserving the outer runner's process-group ownership even after ordinary background commands reparent. This topology does not yet provide command-local timeout cleanup; its replacement or adaptation is pending design.
+- Wraps Pi's public `createBashTool` with `BashOperations`: each operation starts a non-detached privileged supervisor with monitor mode enabled; the nested command Bash runs with monitor mode disabled (`+m`), in its own PGID within the delegate session. A private fd 3 handshake supplies the PGID within 1 second.
 - Uses `/bin/bash` or `bash` on `PATH`; custom Pi `shellPath` is not applied.
-- Currently, Bash timeout/abort fails the whole child via reserved exit codes in `delegate-child-contract.ts`. Target: a command-local failure or timeout can be reported to the same delegate for retry/adaptation only after command cleanup is verified. If cleanup fails or cannot be verified, report an explicit cleanup failure rather than treating it as an ordinary recoverable timeout. How command ownership, cancellation and recovery cleanup fit together remains a design question; do not terminate unrelated earlier background commands merely to enable recovery.
+- Command timeouts clean up and verify only the affected job PGID with fixed TERM → KILL windows, then return a recoverable Pi tool error; ordinary command failures also remain recoverable. Earlier background groups are retained. Failed containment/verification exits with reserved code 86 (`cleanup_failed`); abort exits with reserved code 87 (`cancelled`) and is terminal.
 - Settles on pipe close or a bounded post-exit drain wait, then removes listeners, clears timers, and destroys streams. Continuous background output cannot extend drainage.
 - A private environment marker gates registration and is removed from Bash command environments. This is not a security boundary.
 
@@ -90,9 +90,8 @@ interface DelegateProfile {
 
 ### `src/process-tree.ts`
 
-- POSIX process-group launch and termination helpers.
-- TERM, bounded grace period, KILL escalation.
-- Best-effort liveness verification without indefinite polling.
+- Captures an opaque, distinct, unmasked `ps sess` key from the live detached launch gate before it execs Pi. Privileged gate authorization is private; fail early if session identification is unusable.
+- Scans and signals every live group in that session on normal completion, parent cancellation, and opted-in deadline, including reparented Bash jobs. Bounds `ps` output/calls and TERM → KILL windows; failed verification is reported honestly.
 - No Windows fallback that silently downgrades to direct-child termination.
 
 Modules may be combined if the resulting code is easier to audit.
@@ -124,7 +123,7 @@ Requirements:
 - Do not expose thinking to the caller; use the selected effective profile's level.
 - Use an argument array and `shell: false`.
 - Spawn in the requested cwd.
-- Set `detached: true` on POSIX so the child owns a process group.
+- Set `detached: true` on POSIX for the `/bin/sh` launch gate; capture its new session key before authorizing exec of Pi.
 - Ignore stdin; pipe stdout/stderr.
 - Do not pass parent extension paths or session files.
 - Keep ambient extension and skill discovery disabled; add the private Bash extension first for Bash-enabled profiles, followed by the selected profile's validated explicit local capability paths with repeated CLI flags.
@@ -205,17 +204,17 @@ No callback may resolve/reject the outer promise independently.
 
 ## Deadline, recovery, and cancellation
 
-### Optional run deadline (target)
+### Optional run deadline
 
-No run-deadline timer is armed by default in the target contract. A user may opt into an overall wall-clock safeguard; when configured, it covers startup, model calls, tools, and drainage. Its expiry terminates the delegate using bounded TERM → KILL cleanup and reports a run timeout, not a model answer. The tool must not wait indefinitely for perfect cleanup proof. Command recovery must not reset or extend an opted-in run deadline. The opt-in interface, validation, and migration representation are **pending design**, including how existing explicit user `deadlineMs` values retain their intended safeguards. Do not silently discard those values or treat existing bundled profile limits as user opt-in. Current runtime still enforces mandatory profile deadlines.
+No run-deadline timer is armed by default. A user may opt into an overall wall-clock safeguard; when configured, it covers startup, model calls, tools, and drainage. Its expiry terminates the delegate using bounded TERM → KILL cleanup and reports a run timeout, not a model answer. The tool must not wait indefinitely for perfect cleanup proof. Command recovery must not reset or extend an opted-in run deadline. Complete user/project profile definitions may omit `deadlineMs` or set it to `null` to disable the timer; explicit positive integers, including previously configured values, enable it up to Node's 2,147,483,647 ms timer maximum. Other fields remain required. Bundled profiles have `timeoutMs: null`; there is no caller deadline field.
 
 ### Parent abort
 
 Cancellation always terminates the owned delegate process tree with bounded escalation and honest cleanup diagnostics, regardless of whether a run deadline is configured. If already aborted before spawn, do not launch. Parent cancellation is not a recoverable command failure.
 
-### Subcommand recovery (target)
+### Subcommand recovery
 
-Subcommand failure or timeout should return a bounded diagnostic to the running delegate so it can retry or adapt. Command-local cancellation/abort semantics and ownership topology require explicit design before implementation: recovery must not continue alongside an unverified surviving command. Verify cleanup within bounded waits before exposing a recoverable outcome; failure to contain or verify cleanup must be surfaced as a cleanup failure, not an ordinary recovered timeout. Do not assume cleanup may kill earlier background commands unrelated to the timed-out command; whether and how to isolate them remains open. Do not add package-supplied fast-tool timers.
+A Bash timeout terminates only its isolated job group and verifies cleanup with bounded waits before reporting a recoverable Pi tool error to the same delegate. Earlier background groups remain until whole-session cleanup. A failed handshake or unverified cleanup is terminal `cleanup_failed` (exit 86), not a recovered timeout; abort is terminal `cancelled` (exit 87). Command-local PGID cleanup cannot contain deliberate regrouping within the command; whole-session cleanup still sees groups in the captured session. Do not add package-supplied fast-tool timers.
 
 ## Exit and pipe drainage
 
@@ -225,7 +224,7 @@ Node's child `exit` event can occur before `close`; descendants may keep stdout/
 - start a bounded post-exit pipe-drain timer on `exit`;
 - if pipes do not close, destroy them and finalize;
 - after a trustworthy semantic completion event, start a bounded process-drain timer even if `exit` has not fired;
-- if the child remains alive after semantic completion, terminate the process group; preserve success if the terminal answer is valid and cleanup status is reported honestly. Cleanup that cannot be verified must not be silently presented as a clean completion.
+- if the child remains alive after semantic completion, clean up the captured session; preserve success if the terminal answer is valid and cleanup status is reported honestly. Cleanup that cannot be verified must not be silently presented as a clean completion.
 
 Forced cleanup after a valid terminal answer should be visible in result details:
 
@@ -264,8 +263,7 @@ type FailureCode =
   | "spawn_failed"
   | "cancelled"
   | "run_timeout"
-  | "tool_timeout" // current fatal behavior; target command-local timeout is recoverable after verified cleanup
-  | "cleanup_failed" // target: containment or cleanup not verified
+  | "cleanup_failed" // containment or cleanup not verified (reserved child exit 86)
   | "protocol_error"
   | "child_error"
   | "missing_terminal_answer";
@@ -285,7 +283,7 @@ V1 officially supports macOS and Linux. On `win32`, fail before spawning with a 
 
 ## Containment limits
 
-Ordinary Bash descendants inherit the owned process group. Deliberate daemonization or separate process groups created by trusted custom extensions are not contained. Abrupt parent death is not Pi tool cancellation and does not guarantee immediate cleanup; no parent-death supervisor is provided.
+Ordinary Bash jobs have distinct groups in the owned session, so whole-session cleanup includes them. Command-local cleanup does not cover deliberate regrouping within a command. Deliberate `setsid`/session escape, including by trusted custom extensions, is not contained. Native macOS session-key functionality remains unverified; fail early if `ps` returns unusable or masked session keys. Abrupt parent death is not Pi tool cancellation and does not guarantee immediate cleanup; no parent-death supervisor is provided.
 
 ## Security
 

@@ -14,7 +14,7 @@ import {
   MAX_PROFILE_DEADLINE_MS,
   MAX_PROMPT_BYTES,
 } from "../src/config.ts";
-import { BUNDLED_PROFILES, DELEGATE_THINKING_LEVELS } from "../src/agents.ts";
+import { BUNDLED_PROFILES, createDelegateProfile, DELEGATE_THINKING_LEVELS } from "../src/agents.ts";
 
 async function temporaryConfig() {
   const directory = await mkdtemp(join(tmpdir(), "pi-delegator-config-"));
@@ -75,6 +75,11 @@ test("missing config preserves the five immutable bundled profiles and Pi agent 
     assert.deepEqual(Object.keys(profiles), ["scout", "reviewer", "oracle", "tester", "worker"]);
     assert.equal(Object.isFrozen(profiles), true);
     assert.equal(Object.isFrozen(profiles.scout), true);
+    for (const profile of Object.values(profiles)) {
+      assert.equal(profile.timeoutMs, null, `${profile.name} must not impose a run deadline`);
+      assert.doesNotMatch(profile.systemPrompt, /finish within the bounded run/i);
+      assert.match(profile.systemPrompt, /respect cancellation or any explicitly configured run deadline/i);
+    }
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -112,6 +117,27 @@ test("adds, completely replaces, disables, normalizes, and freezes user profiles
       await writeFile(fixture.path, JSON.stringify({ profiles: { custom: completeProfile({ thinking }) } }));
       assert.equal(loadDelegateProfiles(fixture.path).custom.thinking, thinking);
     }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("omitted and null deadlines disable the run timer; explicit values are preserved", async () => {
+  const fixture = await temporaryConfig();
+  try {
+    const { deadlineMs: _omitted, ...withoutDeadline } = completeProfile();
+    await writeFile(fixture.path, JSON.stringify({ profiles: {
+      omitted: withoutDeadline,
+      disabled: completeProfile({ deadlineMs: null }),
+      existing: completeProfile(),
+      maximum: completeProfile({ deadlineMs: MAX_PROFILE_DEADLINE_MS }),
+    } }));
+    const profiles = loadDelegateProfiles(fixture.path);
+    assert.equal(profiles.omitted.timeoutMs, null);
+    assert.equal(profiles.disabled.timeoutMs, null);
+    assert.equal(profiles.existing.timeoutMs, 12_345);
+    assert.equal(profiles.maximum.timeoutMs, MAX_PROFILE_DEADLINE_MS);
+    assert.equal(createDelegateProfile({ ...profiles.omitted, timeoutMs: null }).timeoutMs, null);
   } finally {
     await fixture.cleanup();
   }
@@ -208,6 +234,7 @@ test("rejects duplicate capability aliases and explicit pi-delegator loading", a
 test("rejects legacy, malformed, incomplete, and unknown configuration with corrective diagnostics", async () => {
   const fixture = await temporaryConfig();
   try {
+    const { tools: _tools, ...missingTools } = completeProfile();
     for (const [contents, profile, expected] of [
       ["", undefined, /valid UTF-8 JSON/],
       ["null", undefined, /top level must be an object/],
@@ -216,6 +243,7 @@ test("rejects legacy, malformed, incomplete, and unknown configuration with corr
       [JSON.stringify({ profiles: [] }), undefined, /"profiles" must be an object/],
       [JSON.stringify({ profiles: {}, extra: true }), undefined, /unknown top-level field/],
       [JSON.stringify({ profiles: { custom: {} } }), "custom", /incomplete; missing/],
+      [JSON.stringify({ profiles: { custom: missingTools } }), "custom", /incomplete; missing "tools"/],
       [JSON.stringify({ profiles: { custom: { ...completeProfile(), extra: true } } }), "custom", /unknown field/],
       [JSON.stringify({ profiles: { "Bad Name": null } }), "Bad Name", /name must match/],
     ]) {
@@ -247,8 +275,11 @@ test("rejects unsafe or invalid complete profile fields before delegation", asyn
       [completeProfile({ extensions: ["custom.md"] }), /extensions path .* is unsupported/],
       [completeProfile({ extensions: ["."] }), /extensions path .* is unsupported/],
       [completeProfile({ extensions: ["npm:example-extension"] }), /not a supported local filesystem path/],
-      [completeProfile({ deadlineMs: 0 }), /deadlineMs must be a positive integer/],
-      [completeProfile({ deadlineMs: MAX_PROFILE_DEADLINE_MS + 1 }), /deadlineMs must be a positive integer/],
+      [completeProfile({ deadlineMs: 0 }), /deadlineMs must be null or a positive integer/],
+      [completeProfile({ deadlineMs: -1 }), /deadlineMs must be null or a positive integer/],
+      [completeProfile({ deadlineMs: 1.5 }), /deadlineMs must be null or a positive integer/],
+      [completeProfile({ deadlineMs: "100" }), /deadlineMs must be null or a positive integer/],
+      [completeProfile({ deadlineMs: MAX_PROFILE_DEADLINE_MS + 1 }), /deadlineMs must be null or a positive integer/],
       [completeProfile({ prompt: "missing.md" }), /could not be read/],
       [completeProfile({ prompt: "custom.txt" }), /Markdown file/],
     ];

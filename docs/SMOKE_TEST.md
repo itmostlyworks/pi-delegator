@@ -1,6 +1,6 @@
 # Manual release smoke test
 
-Run these checks from a clean `pi-delegator` checkout on macOS or Linux with an authenticated Pi installation. They make live provider calls and are intentionally not part of `npm test`.
+Run these checks from a clean `pi-delegator` checkout on macOS or Linux with an authenticated Pi installation. They make live provider calls and are intentionally not part of `npm test`. Optional deadlines and recovery are implemented locally but not yet released; provider smoke checks and native macOS session-key behavior are not yet verified.
 
 ## 1. Prepare and record the environment
 
@@ -38,7 +38,7 @@ Call delegate exactly once with agent scout. Ask it to confirm the purpose of sr
 
 Pass conditions:
 
-- one scout call starts and returns within its three-minute profile deadline;
+- one scout call starts and returns; there is no default run deadline;
 - the response identifies both files accurately;
 - progress is compact rather than a full child transcript.
 
@@ -217,7 +217,11 @@ fi
 unset PI_DELEGATOR_PI_BINARY FAKE_PI_SCENARIO FAKE_PI_DESCENDANT_PID_PATH
 ```
 
-## 9. Record the release result
+## 9. macOS same-session groups (manual, macOS only)
+
+On a native macOS host, use a disposable directory and a fresh Pi session with the local checkout installed. Use a unique marker and ask a worker delegate to start a Bash command that creates a normal background job (for example, a marked `node -e 'setInterval(() => {}, 1000)'` process) and returns while that job remains alive; do **not** use `setsid`, `disown` with session escape, or a custom extension. Observe the background job PID/PGID and `ps -axo pid=,pgid=,sess=,command=` while the delegate is still active: the job should have a different PGID from the delegate but share its `sess` key. Then let the delegate finish, and confirm the marked job is gone after bounded whole-session cleanup. Repeat with a separate marked background job and cancel the active delegate; verify that job is also gone. If `ps` masks or cannot provide a distinct usable session key, the delegate should fail early rather than claim cleanup. Record exact prompts, commands, process observations, elapsed cleanup, and outcomes; do not mark this check passed without running it on macOS. This verifies same-session group cleanup, not deliberate session escape or command-local regrouping.
+
+## 10. Record the release result
 
 Copy this table into the release notes or implementation report and fill every row. Do not mark a release smoke-tested without recording actual outcomes.
 
@@ -231,6 +235,7 @@ Copy this table into the release notes or implementation report and fill every r
 | Parallel sibling scouts |  |  |  |
 | Parent cancellation/process tree |  |  |  |
 | Descendant-held stdout |  |  |  |
+| macOS same-session groups (macOS only) |  |  |  |
 
 Clean up when finished:
 

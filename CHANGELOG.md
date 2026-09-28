@@ -2,6 +2,17 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## Unreleased (implemented locally; not yet published)
+
+### Changed
+
+- Bundled profiles no longer impose a run clock (`timeoutMs: null`). Configured `deadlineMs` may be omitted or `null` to disable the timer; existing positive values remain active, now up to Node's 2,147,483,647 ms timer maximum. No caller deadline input was added.
+- A detached `/bin/sh` launch gate captures a distinct, unmasked opaque `ps sess` key before execing Pi. Completion, parent cancellation, and opted-in deadlines scan and signal all live same-session groups with bounded `ps` calls/output and TERM → KILL windows; unusable keys fail early.
+- Each Bash operation uses a non-detached privileged supervisor with monitor mode enabled to launch a normal Bash job (`+m`) in its own PGID within the session, identified by a private fd 3 handshake bounded to 1 second. Command timeout cleans up only that job group and returns a recoverable Pi tool error; earlier background groups remain until whole-session cleanup. Parent abort remains terminal. Post-exit drainage remains bounded to 100 ms.
+- Unverified command containment/cleanup exits with reserved code 86 (`cleanup_failed`); abort exits 87 (`cancelled`). There is no delegate `tool_timeout` failure code. Command-local cleanup does not cover deliberate regrouping within a command, and session escape remains excluded.
+
+Native macOS session-key behavior and live-provider smoke tests remain unverified.
+
 ## [0.5.6] - 2026-09-09
 
 ### Fixed
