@@ -15,7 +15,9 @@ parent Pi
       └─ finalize once with result, failure, or forced cleanup
 ```
 
-There is no manager process, worker-script DSL, run registry, persistence layer, or recovery path.
+There is no manager process, worker-script DSL, run registry, or persistence layer. Recovery here means the same running delegate may retry or adapt after a failed/timed-out subcommand; it is not package-orchestrated whole-run retry.
+
+**Target contract, not current behavior:** This document describes the approved direction. The current implementation still has fixed profile run deadlines and treats Bash timeout/abort as fatal to the delegate. `README.md` documents current behavior separately; `docs/REQUIREMENTS.md` defines the target contract. This documentation-only change does not alter runtime or settle the pending API and process-ownership design.
 
 ## Suggested modules
 
@@ -39,7 +41,7 @@ There is no manager process, worker-script DSL, run registry, persistence layer,
 ### `src/config.ts`
 
 - Reads bounded user and trusted-project sources once per session.
-- Validates complete profile replacements, disables, prompt files, tools, thinking, models, and bounded deadlines.
+- Validates complete profile replacements, disables, prompt files, tools, thinking, models, and any explicitly configured run deadline. The optional deadline representation and migration rules remain undecided.
 - Resolves project entries over user and bundled profiles without inheritance or field merging.
 - Returns a deeply immutable effective registry; delegate-call working directories never affect discovery.
 
@@ -54,7 +56,7 @@ interface DelegateProfile {
   skills: readonly string[];
   extensions: readonly string[];
   thinking: ThinkingLevel;
-  timeoutMs: number; // normalized configured deadline
+  // Run deadline is optional in the target contract; field/default/migration design pending.
   systemPrompt: string;
 }
 ```
@@ -66,15 +68,15 @@ interface DelegateProfile {
 - Builds CLI arguments.
 - Parses stdout through `protocol.ts`.
 - Captures bounded stderr.
-- Owns timers, abort listener, process-control calls, and the single finalization gate.
+- Owns any configured run-deadline timer, bounded cleanup/drain timers, abort listener, process-control calls, and the single finalization gate.
 
 ### `src/delegate-bash-extension.ts`
 
 - Private child-only extension loaded before configured extensions: Pi uses the first registration for each tool name.
-- Wraps Pi's public `createBashTool` with `BashOperations` that spawn shells with `detached: false`, preserving the outer runner's process-group ownership even after ordinary background commands reparent.
+- Currently wraps Pi's public `createBashTool` with `BashOperations` that spawn shells with `detached: false`, preserving the outer runner's process-group ownership even after ordinary background commands reparent. This topology does not yet provide command-local timeout cleanup; its replacement or adaptation is pending design.
 - Uses `/bin/bash` or `bash` on `PATH`; custom Pi `shellPath` is not applied.
-- Bash timeout/abort fails the whole child with reserved exit codes defined in `delegate-child-contract.ts`. The outer runner prioritizes these failures over any terminal candidate and performs its normal bounded cleanup. This intentionally prevents model continuation after a command-local cancellation.
-- Settles on pipe close or a fixed 100 ms post-exit drain deadline, then removes listeners, clears timers, and destroys streams. Continuous background output cannot extend drainage.
+- Currently, Bash timeout/abort fails the whole child via reserved exit codes in `delegate-child-contract.ts`. Target: a command-local failure or timeout can be reported to the same delegate for retry/adaptation only after command cleanup is verified. If cleanup fails or cannot be verified, report an explicit cleanup failure rather than treating it as an ordinary recoverable timeout. How command ownership, cancellation and recovery cleanup fit together remains a design question; do not terminate unrelated earlier background commands merely to enable recovery.
+- Settles on pipe close or a bounded post-exit drain wait, then removes listeners, clears timers, and destroys streams. Continuous background output cannot extend drainage.
 - A private environment marker gates registration and is removed from Bash command environments. This is not a security boundary.
 
 ### `src/protocol.ts`
@@ -136,7 +138,7 @@ Role prompts must state:
 
 - the role's purpose;
 - the allowed scope;
-- that the task must finish within a bounded run;
+- that tasks remain bounded in scope and respect cancellation or an explicitly configured run deadline;
 - the expected final response format;
 - whether modification is forbidden or allowed;
 - that it must not launch nested agents or long-lived services.
@@ -201,50 +203,29 @@ Every exit path calls one idempotent `finalize(reason)` function. It must:
 
 No callback may resolve/reject the outer promise independently.
 
-## Deadline and cancellation
+## Deadline, recovery, and cancellation
 
-### Wall-clock deadline
+### Optional run deadline (target)
 
-Use the selected profile's fixed deadline; the model-facing tool exposes no deadline override. Arm the run deadline before or immediately after spawn. It includes startup, model calls, tools, and process drainage. Tests may inject shorter private runner deadlines to keep lifecycle fixtures deterministic and fast.
-
-On deadline:
-
-1. classify the run as timed out;
-2. signal the process group with TERM;
-3. wait no more than the configured termination grace period (suggested: 2 seconds);
-4. signal the process group with KILL;
-5. wait a short fixed verification period (suggested: 1 second);
-6. destroy pipes and finalize even if the platform cannot prove every descendant exited.
-
-The tool itself must not remain pending while waiting for perfect cleanup proof.
+No run-deadline timer is armed by default in the target contract. A user may opt into an overall wall-clock safeguard; when configured, it covers startup, model calls, tools, and drainage. Its expiry terminates the delegate using bounded TERM → KILL cleanup and reports a run timeout, not a model answer. The tool must not wait indefinitely for perfect cleanup proof. Command recovery must not reset or extend an opted-in run deadline. The opt-in interface, validation, and migration representation are **pending design**, including how existing explicit user `deadlineMs` values retain their intended safeguards. Do not silently discard those values or treat existing bundled profile limits as user opt-in. Current runtime still enforces mandatory profile deadlines.
 
 ### Parent abort
 
-Use the same termination path, classified as cancellation. If the signal is already aborted before spawn, do not launch.
+Cancellation always terminates the owned delegate process tree with bounded escalation and honest cleanup diagnostics, regardless of whether a run deadline is configured. If already aborted before spawn, do not launch. Parent cancellation is not a recoverable command failure.
 
-### Fast-tool timeout
+### Subcommand recovery (target)
 
-V1 may implement a small fixed timeout for known-fast tools: `read`, `grep`, `find`, `ls`, `edit`, and `write`. Track timers by `toolCallId` from `tool_execution_start` through `tool_execution_end`.
-
-Suggested defaults:
-
-- scout: 45 seconds
-- reviewer/oracle: 120 seconds
-- tester: 120 seconds for known-fast tools
-- worker: 120 seconds for known-fast tools
-- `bash`: no package-supplied fast-tool deadline; the run deadline always applies. A Bash-supplied timeout ends the whole delegation with `tool_timeout`; a Bash abort ends it with `cancelled`.
-
-If protocol event names differ in the installed Pi version, verify against the official example and actual JSON-mode output before coding the timer.
+Subcommand failure or timeout should return a bounded diagnostic to the running delegate so it can retry or adapt. Command-local cancellation/abort semantics and ownership topology require explicit design before implementation: recovery must not continue alongside an unverified surviving command. Verify cleanup within bounded waits before exposing a recoverable outcome; failure to contain or verify cleanup must be surfaced as a cleanup failure, not an ordinary recovered timeout. Do not assume cleanup may kill earlier background commands unrelated to the timed-out command; whether and how to isolate them remains open. Do not add package-supplied fast-tool timers.
 
 ## Exit and pipe drainage
 
 Node's child `exit` event can occur before `close`; descendants may keep stdout/stderr open forever. Therefore:
 
 - listen to both `exit` and `close`;
-- start a short post-exit pipe-drain timer on `exit`;
+- start a bounded post-exit pipe-drain timer on `exit`;
 - if pipes do not close, destroy them and finalize;
-- after a trustworthy semantic completion event, start a short process-drain timer even if `exit` has not fired;
-- if the child remains alive after semantic completion, terminate the process group but preserve success if the terminal answer is valid.
+- after a trustworthy semantic completion event, start a bounded process-drain timer even if `exit` has not fired;
+- if the child remains alive after semantic completion, terminate the process group; preserve success if the terminal answer is valid and cleanup status is reported honestly. Cleanup that cannot be verified must not be silently presented as a clean completion.
 
 Forced cleanup after a valid terminal answer should be visible in result details:
 
@@ -283,7 +264,8 @@ type FailureCode =
   | "spawn_failed"
   | "cancelled"
   | "run_timeout"
-  | "tool_timeout"
+  | "tool_timeout" // current fatal behavior; target command-local timeout is recoverable after verified cleanup
+  | "cleanup_failed" // target: containment or cleanup not verified
   | "protocol_error"
   | "child_error"
   | "missing_terminal_answer";

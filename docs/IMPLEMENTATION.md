@@ -4,6 +4,17 @@
 
 Implement one small vertical path first, then harden it. Do not build all profile or rendering conveniences before lifecycle tests pass.
 
+**Target contract, not current behavior:** The shipped runner still enforces fixed profile deadlines and fails the entire child on Bash timeout/abort. The original delivery stages below have been aligned with the approved target, as has the lifecycle matrix; they are not evidence of passing runtime behavior today. `README.md` documents current behavior separately; `docs/REQUIREMENTS.md` defines the target contract. This documentation-only update does not settle the deadline API, migration, or command cleanup architecture.
+
+## Transition work (not implemented)
+
+Before changing runtime behavior:
+
+- Design the user opt-in deadline interface and migration of existing explicit `deadlineMs` values, without carrying bundled mandatory limits into the new default.
+- Design command ownership and bounded cleanup that allow timeout recovery without weakening parent cancellation or assuming collateral shutdown of earlier commands is acceptable.
+- Replace fatal command-timeout handling with a recoverable tool error after safe cleanup; keep cleanup failure distinct.
+- Update profile/configuration handling, role prompts, lifecycle tests, and current-behavior documentation together. Existing tests that assert fatal Bash timeouts verify the old contract, not the target.
+
 ## Stage 1: package and clean scout path
 
 Deliver:
@@ -15,8 +26,7 @@ Deliver:
 - the `scout` profile
 - fresh foreground Pi child invocation
 - bounded JSONL parsing
-- a mandatory wall-clock deadline
-- parent abort propagation
+- parent abort propagation and bounded cleanup; optional user-controlled run deadline in the target contract (interface pending)
 - basic success/failure results
 - tests using a fake Pi executable
 
@@ -24,7 +34,7 @@ Acceptance:
 
 - Pi can load the extension.
 - A fake clean child returns a terminal answer.
-- A hanging child is terminated and the tool settles within its deadline plus cleanup grace.
+- Parent cancellation or an explicitly configured run deadline terminates a hanging child with bounded cleanup; no run timer is armed by default in the target contract.
 - Typecheck and tests pass.
 
 ## Stage 2: deterministic process cleanup
@@ -40,19 +50,19 @@ Deliver:
 
 Acceptance:
 
-- A child that spawns a descendant holding stdout open cannot hang the tool.
+- After child exit or semantic completion, a descendant holding stdout open cannot hang the tool.
 - A TERM-resistant child is escalated to KILL.
 - A valid terminal answer remains successful when forced cleanup is required.
-- Cancellation and timeout never produce duplicate completion.
+- Cancellation and an opted-in run timeout never produce duplicate completion.
 
 ## Stage 3: remaining profiles and progress
 
 Deliver:
 
 - reviewer, oracle, tester, and worker profiles
-- fixed role prompts/tool allowlists/default thinking/deadlines
+- fixed role prompts/tool allowlists/default thinking; optional user-controlled deadline policy pending design
 - compact `onUpdate` progress
-- optional caller model override; thinking and deadlines remain profile-controlled
+- optional caller model override; thinking remains profile-controlled; deadline interface pending design
 - usage aggregation from assistant events
 
 Acceptance:
@@ -70,7 +80,7 @@ Deliver:
 
 - optional bounded user-level configuration at the Pi agent directory
 - a `profiles` map whose entries add or completely replace profiles, or disable names with `null`
-- complete definitions for description, model, thinking, prompt, tools, explicit local capability arrays, and bounded deadline
+- complete definitions for description, model, thinking, prompt, tools, and explicit local capability arrays; optional deadline representation and migration pending design
 - model precedence: call override → effective profile → inherited parent model
 - strict validation with source/profile/corrective startup diagnostics
 - trusted project-level configuration with project → user → bundled precedence
@@ -79,9 +89,9 @@ Deliver:
 
 Acceptance:
 
-- With no config file, bundled behavior is unchanged.
+- With no config file, bundled roles and tool access are preserved, with no default run timer.
 - Complete user profiles add, replace, and disable names reflected in the tool schema.
-- Per-call model fields override only one invocation; thinking and deadlines cannot be overridden per call.
+- Per-call model fields override only one invocation; thinking cannot be overridden per call. Deadline opt-in interface and treatment of existing explicit user `deadlineMs` values require migration review; do not discard existing safeguards silently.
 - Legacy, incomplete, malformed, and unsafe configuration fails before delegation.
 - Trusted project configuration can add, replace, and disable profiles; untrusted project configuration is ignored.
 - Delegate-call working directories cannot select profile configuration, and different project sessions retain independent registries.
@@ -132,15 +142,19 @@ Prefer small fixture scripts over mocks of `node:child_process`; real processes 
 - truncates final text at 50 KiB with explicit metadata
 - retains only a 64 KiB stderr tail
 
-### Deadline and cancellation
+### Optional deadline and cancellation
 
-- wall-clock deadline settles the run
+- no run-deadline timer is armed by default in the target contract
+- explicit user opt-in run deadline settles the run and terminates the group with bounded cleanup
+- existing explicit user deadline values are covered by migration tests once representation is decided
 - already-aborted parent signal prevents launch
 - parent abort during model activity terminates the group
 - parent abort during a tool terminates the group
-- deadline racing normal completion resolves exactly once
-- abort racing deadline resolves exactly once
-- timers and listeners do not keep the test process alive
+- opted-in deadline racing normal completion resolves exactly once
+- abort racing an opted-in deadline resolves exactly once
+- command recovery does not reset or extend an opted-in run deadline
+- cancellation without a configured run deadline still settles with bounded cleanup
+- cleanup/drain timers and listeners do not keep the test process alive
 
 ### Process tree and drainage
 
@@ -151,30 +165,29 @@ Prefer small fixture scripts over mocks of `node:child_process`; real processes 
 - child spawns a TERM-resistant descendant
 - pipe-drain guard finalizes without waiting indefinitely
 - forced cleanup metadata is accurate
-- actual Pi Bash tool background descendants are gone after normal completion, run timeout, and parent cancellation
-- Bash-supplied timeout/abort ends the delegation and cannot be hidden by a terminal candidate
+- delegate-owned process tree is cleaned up after normal completion, opted-in run timeout, and parent cancellation, with bounded waits and honest diagnostics if verification fails
+- Bash command failure/timeout reports bounded diagnostics and permits the same delegate to retry/adapt only after cleanup is verified; a surviving command or unverified cleanup is an explicit cleanup failure, not an ordinary recoverable timeout
+- tests cover command isolation from unrelated earlier background commands once ownership topology is decided; do not assume collateral shutdown is acceptable
+- parent cancellation during a subcommand remains terminal for the delegate
 - private Bash registration wins over conflicting configured extensions through Pi's actual loader
-- Bash output drainage has a fixed bound and no callbacks occur after settlement
+- Bash output drainage is bounded and no callbacks occur after settlement
 
-### Tool timeout
+### Subcommand recovery
 
-If implemented in V1:
-
-- known-fast tool arms timeout
-- matching tool end clears timeout
-- concurrent tool IDs do not clear each other's timers
-- `bash` does not receive the known-fast deadline
-- tool timeout cannot extend the run deadline
+- failed and timed-out subcommands can be observed and retried/adapted within the same delegate, without package-orchestrated whole-run retries
+- command-local cleanup is bounded and verified before a recoverable result is returned
+- cleanup failure is distinguished from command timeout/failure and cannot be hidden by a terminal candidate
+- command ownership/recovery cleanup topology and command-local abort semantics are pending design; tests must cover the chosen isolation behavior without assuming earlier background commands may be killed
 
 ### Profiles and concurrency
 
 - each bundled or configured profile emits its expected model/thinking/tools/prompt arguments
 - effective names and descriptions appear in the tool schema after add/replace/disable resolution
-- call model overrides replace profile defaults for only that call, including concurrent calls; thinking and deadline overrides are absent from the tool schema
+- call model overrides replace profile defaults for only that call, including concurrent calls; thinking overrides are absent from the tool schema; deadline opt-in surface is pending design
 - invalid or oversized model overrides are rejected
-- the tool schema exposes no caller deadline override
+- deadline opt-in interface and explicit configured-value migration are tested after design is settled
 - two concurrent delegate calls return their own output
-- one concurrent timeout does not stop its sibling
+- one concurrent opted-in run timeout does not stop its sibling
 
 ## Manual smoke tests
 
@@ -202,11 +215,11 @@ npm test
 
 Add formatting or linting only if configured intentionally; do not spend the first slice installing a large toolchain.
 
-## Definition of done for v0.1.0
+## Definition of done for the target contract
 
-- All requirements acceptance criteria pass.
-- Lifecycle matrix is automated except explicitly marked manual real-Pi checks.
-- No unbounded timer, process wait, stream buffer, or returned output is known.
+- Before claiming the target contract is implemented, verify the updated acceptance criteria in `docs/REQUIREMENTS.md` and update `README.md` to describe the new runtime behavior.
+- Target lifecycle matrix is automated except explicitly marked manual real-Pi checks.
+- Cleanup/drain waits, stream buffers, and returned output are bounded; active work without an opted-in run deadline is permitted.
 - No V1 non-goal has entered the public API.
 - Source remains small enough for a reviewer to trace one run end-to-end.
 - README accurately states supported platforms and limitations.

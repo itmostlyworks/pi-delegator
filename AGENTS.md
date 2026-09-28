@@ -13,12 +13,14 @@ The scope exclusions are part of the product contract. Do not add features merel
 
 ## Product charter
 
-`pi-delegator` is a bounded subprocess runner exposed as one Pi tool. Keep it understandable enough that one engineer can audit the complete launch, timeout, cancellation, parsing, and cleanup path in one sitting.
+`pi-delegator` is a focused subprocess runner exposed as one Pi tool. Keep it understandable enough that one engineer can audit the complete launch, cancellation, parsing, recovery, and cleanup path in one sitting.
+
+Bound cleanup waits and output, not useful work by default. Subcommand failures and timeouts should be recoverable after safe cleanup. Overall run deadlines are optional user-controlled safeguards, not mandatory profile budgets. These are target requirements; consult the docs for the current implementation gap.
 
 Optimize in this order:
 
-1. deterministic termination
-2. correct success/failure classification
+1. reliable cancellation and bounded cleanup
+2. correct success/failure classification, including recoverable tool errors
 3. small surface area
 4. useful diagnostics
 5. presentation
@@ -34,7 +36,7 @@ Read Pi documentation and examples before using an API; do not guess extension b
 - Official subagent example:
   `/Users/ludwigbacklund/.nodenv/versions/26.5.0/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/`
 
-The official example demonstrates discovery, child invocation, JSON-mode parsing, and tool registration. Its process lifecycle is not sufficient for this project: it has no mandatory wall-clock timeout and only signals the direct child. Reuse ideas, not those failure semantics.
+The official example demonstrates discovery, child invocation, JSON-mode parsing, and tool registration. Its process lifecycle is not sufficient for this project: it only signals the direct child rather than reliably cleaning up owned subprocesses. Reuse ideas, not those failure semantics.
 
 For targeted lifecycle reference only, inspect these installed `pi-subagents` files when needed:
 
@@ -53,7 +55,7 @@ Do not copy its workflow, persistence, reconciliation, intercom, or artifact arc
 - Child runs must disable extension and skill discovery to prevent recursion and ambient behavior.
 - Never wait exclusively on the child `close` event; descendants may keep pipes open.
 - Bound pending JSONL lines, returned output, and stderr diagnostics.
-- Use one idempotent finalization path for normal completion, timeout, parent abort, spawn error, protocol error, and forced cleanup.
+- Use one idempotent finalization path for normal completion, an explicitly enabled run deadline, parent abort, spawn error, protocol error, and forced cleanup. Do not turn a recoverable command timeout into whole-run finalization.
 - Timers and abort listeners must always be removed during finalization.
 - Errors from the model-facing tool must be thrown or returned using Pi's actual error semantics; do not invent an `isError` return field and assume it works.
 - Do not claim Windows support until process-tree termination is implemented and tested there. Fail early with an actionable message instead.
@@ -86,5 +88,5 @@ If implementation seems to require one of these, stop and explain the requiremen
 - Make the smallest coherent change.
 - Add or update tests for lifecycle behavior.
 - Run typecheck and tests before declaring completion.
-- Review the final diff for feature creep and unbounded waits.
+- Review the final diff for feature creep and unbounded cleanup or drainage waits. An active run without an opted-in deadline is not itself a lifecycle bug.
 - Report commands run with exit codes and any behavior that remains unverified.
