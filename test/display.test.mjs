@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compactDisplayText, formatProgress, terminalSafe, toolStartLabel } from "../src/display.ts";
+import { compactDisplayText, formatProgress, renderProgress, terminalSafe, toolStartLabel } from "../src/display.ts";
 
 const start = (toolName, args = {}) => ({ type: "tool_start", toolName, args });
 const message = (text) => ({ type: "assistant_message", text });
@@ -33,11 +33,39 @@ test("recent starts are not compressed or completion claims; commentary persists
   const a = state();
   const b = state();
   formatProgress(message("Inspecting\n files"), a, "/repo");
-  for (let i = 0; i < 9; i++) formatProgress(start("read", { path: `file${i}` }), a, "/repo");
+  for (let i = 0; i < 8; i++) formatProgress(start("read", { path: `file${i}` }), a, "/repo");
+  assert.equal(formatProgress(message(undefined), a, "/repo"), "Recent tool starts · 8 total · 4 earlier\n· read file4\n· read file5\n· read file6\n→ read file7\n\nLatest commentary: Inspecting files");
+  assert.equal(renderProgress(a, true), "Recent tool starts · 8 total\n· read file0\n· read file1\n· read file2\n· read file3\n· read file4\n· read file5\n· read file6\n→ read file7\n\nLatest commentary: Inspecting files");
+  assert.equal(a.recentTools.length, 8);
+  formatProgress(start("read", { path: "file8" }), a, "/repo");
   const text = formatProgress(message(" \n "), a, "/repo");
   assert.equal(text, "Recent tool starts · 9 total · 5 earlier\n· read file5\n· read file6\n· read file7\n→ read file8\n\nLatest commentary: Inspecting files");
-  assert.equal(a.recentTools.length, 4);
+  assert.equal(renderProgress(a, true), "Recent tool starts · 9 total · 1 earlier\n· read file1\n· read file2\n· read file3\n· read file4\n· read file5\n· read file6\n· read file7\n→ read file8\n\nLatest commentary: Inspecting files");
+  assert.equal(a.recentTools.length, 8);
   assert.equal(formatProgress(start("ls", { path: "." }), b, "/other"), "Recent tool starts · 1 total\n→ ls .");
   assert.equal(formatProgress(message(undefined), b, "/other"), "Recent tool starts · 1 total\n→ ls .");
+  assert.equal(renderProgress(b, true), "Recent tool starts · 1 total\n→ ls .");
   assert.equal(a.totalCalls, 9);
+});
+
+test("collapsed and expanded boundaries count earlier starts against displayed rows without mutation", () => {
+  const summary = state();
+  assert.equal(renderProgress(summary), "No tool starts yet");
+  assert.equal(renderProgress(summary, true), "No tool starts yet");
+  for (let count = 1; count <= 10; count++) {
+    const collapsed = formatProgress(start("read", { path: "same" }), summary, "/repo");
+    const snapshot = structuredClone(summary);
+    for (const expanded of [false, true]) {
+      const visible = Math.min(count, expanded ? 8 : 4);
+      const earlier = count - visible;
+      const expected = [
+        `Recent tool starts · ${count} total${earlier ? ` · ${earlier} earlier` : ""}`,
+        ...Array.from({ length: visible }, (_, index) => `${index === visible - 1 ? "→" : "·"} read same`),
+      ].join("\n");
+      assert.equal(renderProgress(summary, expanded), expected);
+      if (!expanded) assert.equal(collapsed, expected);
+    }
+    assert.deepEqual(summary, snapshot);
+    assert.equal(summary.recentTools.length, Math.min(count, 8));
+  }
 });

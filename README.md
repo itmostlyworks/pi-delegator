@@ -143,7 +143,7 @@ Trusted projects may provide the same complete document at `.pi/pi-delegator.jso
 
 Delegate results show the selected profile, model selector, thinking level, and duration above the returned text. The model reflects call, effective-profile, and parent-session precedence; thinking comes from the effective profile. Pi may still resolve a fuzzy model selector or clamp thinking to the selected model's capabilities. The collapsed view uses the model ID and bounds the output preview by both lines and text length; expand the tool result to see the full provider/model selector and complete returned text.
 
-While running, the chat shows a readable task preview, the same model/thinking header, up to four recent tool starts with bounded relative file targets, and a bounded preview of the latest visible assistant commentary. The arrow marks the latest observed start, not proof that the tool is still executing. Shell commands are classified rather than displayed verbatim; search patterns and unknown-tool arguments are omitted. The display appears immediately, then refreshes once per second with elapsed time and the latest observed activity. Tool starts and completed assistant messages update stored progress without triggering extra renders between ticks. The final result appears immediately when the call settles, and the heartbeat stops. This is not a child/provider health check: silence does not imply a stalled run.
+While running, the chat shows a readable task preview (the complete task when expanded), the same model/thinking header, up to four recent tool starts when collapsed or eight when expanded with bounded relative file targets, and a bounded preview of the latest visible assistant commentary. The arrow marks the latest observed start, not proof that the tool is still executing. Shell commands are classified rather than displayed verbatim; search patterns and unknown-tool arguments are omitted. The display appears immediately, then refreshes once per second with elapsed time and the latest observed activity. Tool starts and completed assistant messages update stored progress without triggering extra renders between ticks. The final result appears immediately when the call settles, and the heartbeat stops. This is not a child/provider health check: silence does not imply a stalled run.
 
 This metadata is display-only. The model-visible tool result remains the delegate's bounded response text. Delegated model usage is attached to Pi's tool result, so its tokens and cost are included in the parent session's footer and usage totals.
 
@@ -164,7 +164,7 @@ Model-visible output is bounded:
 - final response: 50 KiB, with explicit truncation metadata
 - stderr tail: 64 KiB
 - pending JSONL line: 1 MiB; oversized tool-result events are discarded without discarding the run
-- progress: accumulating tool-start count, four recent starts with bounded file targets, and a bounded preview of the latest visible assistant commentary
+- progress: accumulating tool-start count, eight retained recent starts (four displayed when collapsed) with bounded file targets, and a bounded preview of the latest visible assistant commentary
 
 ## Deliberate limitations
 

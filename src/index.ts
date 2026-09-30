@@ -6,7 +6,7 @@ import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { compactDisplayText, formatProgress, terminalSafe, type ProgressSummary } from "./display.ts";
+import { compactDisplayText, formatProgress, renderProgress, terminalSafe, type ProgressSummary } from "./display.ts";
 import {
   getDelegateProfile,
   type DelegateProfile,
@@ -76,6 +76,7 @@ export interface DelegateDetails {
   readonly usage: UsageSummary;
   readonly truncated: boolean;
   readonly originalBytes?: number;
+  readonly expandedProgress?: string;
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
   readonly cleanup: CleanupDetails;
@@ -196,7 +197,13 @@ function formatRenderedResult(
   const header =
     theme.fg("toolTitle", theme.bold(compactDisplayText(profileLabel(details.agent), 64))) +
     theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${formatDuration(details.durationMs)}${isPartial ? " · Running" : ""}`);
-  const output = formatRenderedOutput(resultText(content), expanded || isPartial, theme);
+  const output = formatRenderedOutput(
+    expanded && isPartial && details.expandedProgress !== undefined
+      ? details.expandedProgress
+      : resultText(content),
+    expanded || isPartial,
+    theme,
+  );
   return output ? `${header}\n${output}` : header;
 }
 
@@ -262,7 +269,10 @@ function registerDelegateTool(
         try {
           onUpdate?.({
             content: [{ type: "text", text: latestText }],
-            details: progressDetails(profile, model, thinking, now - startedAt, latestUsage),
+            details: {
+              ...progressDetails(profile, model, thinking, now - startedAt, latestUsage),
+              expandedProgress: renderProgress(progressSummary, true),
+            },
           });
         } catch {
           // Display observers must never affect the delegate lifecycle.
@@ -307,8 +317,10 @@ function registerDelegateTool(
       };
     },
 
-    renderCall(args, theme, _context) {
-      const task = typeof args.task === "string" ? compactDisplayText(args.task, 240) : "…";
+    renderCall(args, theme, context) {
+      const task = typeof args.task === "string"
+        ? context.expanded ? terminalSafe(args.task) : compactDisplayText(args.task, 240)
+        : "…";
       return new Text(theme.fg("toolTitle", theme.bold("Delegate")) + "\n" + theme.fg("toolOutput", task) + "\n", 0, 0);
     },
 

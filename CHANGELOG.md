@@ -2,6 +2,13 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.6.3] - 2026-09-30
+
+### Changed
+
+- Expanded delegate calls show the full task prompt, preserving line breaks; collapsed calls retain the compact preview.
+- Running activity shows eight recent tool starts when expanded and four when collapsed, with earlier-start counts matching the visible window.
+
 ## [0.6.2] - 2026-09-30
 
 ### Changed

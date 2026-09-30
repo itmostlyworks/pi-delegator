@@ -159,6 +159,11 @@ test("renders readable safe tasks and unclipped live activity with model and thi
   assert.doesNotMatch(call, /private|task:|cwd:/);
   const longCall = renderText(tool.renderCall({ task: "😀".repeat(500) }, plainTheme, {}), 80);
   assert.equal(Array.from(longCall.replace(/\n/g, "").slice("Delegate".length)).length, 241);
+  const expandedTask = "Inspect\n source\x1b[31m now\x1b[0m\u202e\n" + "😀".repeat(500) + "END";
+  const expandedCall = renderText(tool.renderCall({ task: expandedTask }, plainTheme, { expanded: true }), 80);
+  assert.equal(expandedCall.replace(/\n/g, ""), "DelegateInspect source now" + "😀".repeat(500) + "END");
+  assert.match(expandedCall, /^Delegate\nInspect\n source now\n/);
+  assert.equal(renderText(tool.renderCall({}, plainTheme, { expanded: true })), "Delegate\n…\n");
   const output = `Recent tool starts · 4 total\n${Array.from({ length: 4 }, (_, i) => `${i === 3 ? "→" : "·"} read ${"x".repeat(160)}${i}:9007199254740991`).join("\n")}\n\nLatest commentary: ${"c".repeat(240)}END`;
   const content = [{ type: "text", text: output }];
   const details = { agent: "worker", model: "provider/model", thinking: "high", durationMs: 10 };
@@ -172,6 +177,23 @@ test("renders readable safe tasks and unclipped live activity with model and thi
   assert.doesNotMatch(final, /Running/);
   assert.match(final, /preview truncated/);
   assert.equal(content[0].text, output);
+});
+
+test("live activity uses four collapsed entries and eight expanded entries", () => {
+  const tool = registeredTool();
+  const collapsedProgress = "Recent tool starts · 9 total · 5 earlier\n· read file5\n· read file6\n· read file7\n→ read file8";
+  const expandedProgress = "Recent tool starts · 9 total · 1 earlier\n" +
+    Array.from({ length: 8 }, (_, i) => `${i === 7 ? "→" : "·"} read file${i + 1}`).join("\n");
+  const result = {
+    content: [{ type: "text", text: collapsedProgress }],
+    details: { agent: "worker", thinking: "high", durationMs: 10, expandedProgress },
+  };
+  for (const expanded of [false, true]) {
+    const text = renderText(tool.renderResult(result, { expanded, isPartial: true }, plainTheme, {}));
+    assert.equal(text.split("\n").slice(1).join("\n"), expanded ? expandedProgress : collapsedProgress);
+  }
+  const final = renderText(tool.renderResult(result, { expanded: true, isPartial: false }, plainTheme, {}));
+  assert.equal(final.split("\n").slice(1).join("\n"), collapsedProgress);
 });
 
 test("fixed profiles expose their thinking, no default deadlines, and tools", () => {
