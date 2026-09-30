@@ -253,29 +253,48 @@ function registerDelegateTool(
       const thinking = profile.thinking;
       const startedAt = Date.now();
       const progressSummary: ProgressSummary = { totalCalls: 0, recentTools: [] };
-      const result = await runDelegate({
-        profile,
-        task: params.task,
-        cwd,
-        ...(model === undefined ? {} : { model }),
-        ...(signal === undefined ? {} : { signal }),
-        ...(onUpdate === undefined
-          ? {}
-          : {
-              onProgress: (progress: DelegateProgress) => {
-                onUpdate({
-                  content: [{ type: "text", text: formatProgress(progress, progressSummary, cwd) }],
-                  details: progressDetails(
-                    profile,
-                    model,
-                    thinking,
-                    Date.now() - startedAt,
-                    progress.usage,
-                  ),
-                });
-              },
-            }),
-      });
+      let latestText = "No tool starts yet";
+      let latestUsage: UsageSummary = {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0,
+      };
+      const publishUpdate = () => {
+        const now = Date.now();
+        try {
+          onUpdate?.({
+            content: [{ type: "text", text: latestText }],
+            details: progressDetails(profile, model, thinking, now - startedAt, latestUsage),
+          });
+        } catch {
+          // Display observers must never affect the delegate lifecycle.
+        }
+      };
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let result: Awaited<ReturnType<typeof runDelegate>>;
+      try {
+        if (onUpdate !== undefined) {
+          publishUpdate();
+          heartbeat = setInterval(publishUpdate, 1_000);
+          heartbeat.unref();
+        }
+        result = await runDelegate({
+          profile,
+          task: params.task,
+          cwd,
+          ...(model === undefined ? {} : { model }),
+          ...(signal === undefined ? {} : { signal }),
+          ...(onUpdate === undefined
+            ? {}
+            : {
+                onProgress: (progress: DelegateProgress) => {
+                  latestText = formatProgress(progress, progressSummary, cwd);
+                  // Coalesce events until the next tick to keep rendering on a steady cadence.
+                  latestUsage = progress.usage;
+                },
+              }),
+        });
+      } finally {
+        if (heartbeat !== undefined) clearInterval(heartbeat);
+      }
 
       if (!result.ok) {
         recordFailedUsage(toolCallId, result.nativeUsage);

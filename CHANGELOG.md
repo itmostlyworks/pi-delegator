@@ -2,6 +2,13 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.6.2] - 2026-09-30
+
+### Changed
+
+- Running delegate displays refresh on a steady one-second cadence, coalescing tool activity and commentary between ticks while refreshing elapsed time. Initial display and final results remain immediate.
+- Display timers are isolated per call and cleared on every settlement path; observer failures do not affect delegation lifecycle. No activity-age indicator or inferred liveness state is shown.
+
 ## [0.6.1] - 2026-09-30
 
 ### Changed

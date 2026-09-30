@@ -281,18 +281,9 @@ test("applies a model override while preserving profile thinking and streams com
     assert.equal(result.details.agent, "reviewer");
     assert.equal(result.details.model, "override/model");
     assert.equal(result.details.thinking, "high");
-    assert.deepEqual(updates.map((update) => update.content[0].text), [
-      "No tool starts yet\nLatest commentary: Inspecting code",
-      "Recent tool starts · 1 total\n→ read src\nLatest commentary: Inspecting code",
-      "Recent tool starts · 2 total\n· read src\n→ grep\nLatest commentary: Inspecting code",
-      "Recent tool starts · 3 total\n· read src\n· grep\n→ read test\nLatest commentary: Inspecting code",
-      "Recent tool starts · 4 total\n· read src\n· grep\n· read test\n→ read docs\nLatest commentary: Inspecting code",
-      "Recent tool starts · 5 total · 1 earlier\n· grep\n· read test\n· read docs\n→ bash(pnpm test)\nLatest commentary: Inspecting code",
-      "Recent tool starts · 6 total · 2 earlier\n· read test\n· read docs\n· bash(pnpm test)\n→ find\nLatest commentary: Inspecting code",
-      "Recent tool starts · 7 total · 3 earlier\n· read docs\n· bash(pnpm test)\n· find\n→ ls .\nLatest commentary: Inspecting code",
-      "Recent tool starts · 8 total · 4 earlier\n· bash(pnpm test)\n· find\n· ls .\n→ 工具工具工具工具工具工具…\nLatest commentary: Inspecting code",
-      "Recent tool starts · 8 total · 4 earlier\n· bash(pnpm test)\n· find\n· ls .\n→ 工具工具工具工具工具工具…\nLatest commentary: Review complete",
-    ].map((text) => text.replace("\nLatest commentary:", "\n\nLatest commentary:")));
+    assert.equal(updates[0].content[0].text, "No tool starts yet");
+    assert.ok(updates.length >= 1); // Fast runs need not reach the first display tick.
+    assert.ok(updates.every((update) => update.details.model === "override/model"));
     delete process.env.FAKE_PI_RECORD_PATH;
     const siblingUpdates = [[], []];
     const siblings = await Promise.all(["first/model-a", "second/model-b"].map((model, index) =>
@@ -301,13 +292,13 @@ test("applies a model override while preserving profile thinking and streams com
     ));
     for (const [index, model] of ["first/model-a", "second/model-b"].entries()) {
       assert.equal(siblings[index].details.model, model);
-      assert.equal(siblingUpdates[index].length, 10);
+      assert.ok(siblingUpdates[index].length >= 1);
       assert.ok(siblingUpdates[index].every((update) => update.details.model === model));
-      assert.equal(siblingUpdates[index].at(-1).content[0].text, updates.at(-1).content[0].text);
+      assert.equal(siblingUpdates[index][0].content[0].text, "No tool starts yet");
     }
     assert.notEqual(siblingUpdates[0][0].details, siblingUpdates[1][0].details);
     assert.equal(result.content[0].text, "Review complete");
-    assert.equal(updates.at(-1).details.usage.turns, 2);
+    assert.equal(result.details.usage.turns, 2);
     assert.equal(result.details.usage.input, 8);
     assert.equal(result.details.usage.cost, 0.03);
     assert.deepEqual(result.usage, {
@@ -369,10 +360,8 @@ test("returns an explicit truncation marker in model-facing tool content", async
       context(directory),
     );
 
-    assert.equal(updates.length, 1);
-    const preview = updates[0].content[0].text.replace("No tool starts yet\n\nLatest commentary: ", "");
-    assert.equal(Array.from(preview).length, 241);
-    assert.equal(preview, `${"😀".repeat(240)}…`);
+    assert.ok(updates.length >= 1);
+    assert.equal(updates[0].content[0].text, "No tool starts yet");
     assert.equal(result.details.truncated, true);
     assert.equal(result.details.originalBytes, 52_000);
     assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);
@@ -693,6 +682,155 @@ test("tool throws runner failures using Pi error semantics", async () => {
       tool.execute("id", { agent: "scout", task: "Inspect" }, undefined, undefined, context(process.cwd())),
       /\[spawn_failed\]/,
     );
+  } finally {
+    if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
+    else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
+  }
+});
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("does not arm a display interval without an update observer", async () => {
+  const tool = registeredTool();
+  const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
+  const originalSetInterval = globalThis.setInterval;
+  let intervalCalls = 0;
+  process.env.PI_DELEGATOR_PI_BINARY = resolve("test/fixtures/fake-pi.mjs");
+  globalThis.setInterval = (...args) => {
+    intervalCalls += 1;
+    return originalSetInterval(...args);
+  };
+  try {
+    const result = await tool.execute("no-observer", { agent: "scout", task: "Inspect" }, undefined, undefined, context(process.cwd()));
+    assert.ok(result.content[0].text.length > 0);
+    assert.equal(intervalCalls, 0);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
+    else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
+  }
+});
+
+test("one-second ticks coalesce activity and usage, advance quiet elapsed time, and isolate parallel calls", async () => {
+  const tool = registeredTool();
+  const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
+  process.env.PI_DELEGATOR_PI_BINARY = resolve("test/fixtures/heartbeat-pi.mjs");
+  const controller = new AbortController();
+  const updates = [[], [], []];
+  const starts = [0, 0, 0];
+  const schedules = [
+    { label: "active" },
+    { label: "quiet", activity: false, finishMs: 3_350 },
+    { label: "cancelled", finishMs: 10_000 },
+  ];
+  let abortTimer;
+  try {
+    const runs = schedules.map((schedule, index) => {
+      starts[index] = Date.now();
+      return tool.execute(`heartbeat-${index}`, { agent: "scout", task: JSON.stringify(schedule), model: `provider/model-${index}` },
+        index === 2 ? controller.signal : undefined,
+        (update) => updates[index].push({ update, at: Date.now() - starts[index] }), context(process.cwd()));
+    });
+    // Attach the rejection observer before cancellation.
+    const cancelled = assert.rejects(runs[2], /\[cancelled\]/);
+    abortTimer = setTimeout(() => controller.abort(), 3_200);
+    const results = await Promise.all([runs[0], runs[1], cancelled]);
+    assert.equal(results[0].content[0].text, "active complete");
+    assert.equal(results[1].content[0].text, "quiet complete");
+    const text = (entry) => entry.update.content[0].text;
+    const active = updates[0];
+    assert.equal(text(active[0]), "No tool starts yet");
+    assert.ok(active.length >= 4, "real run must reach at least three display ticks");
+    assert.equal(text(active[1]), "Recent tool starts · 1 total\n→ read active.ts\n\nLatest commentary: active");
+    assert.equal(active[1].update.details.usage.input, 7);
+    assert.equal(active[1].update.details.usage.turns, 1);
+    assert.equal(active[1].update.details.usage.cost, 0.02);
+    assert.equal(text(active[2]), "Recent tool starts · 2 total\n· read active.ts\n→ grep\n\nLatest commentary: active follow-up");
+    assert.equal(active[2].update.details.usage.input, 12);
+    assert.equal(active[2].update.details.usage.turns, 2);
+    assert.equal(active[2].update.details.usage.cost, 0.03);
+    assert.equal(text(active[3]), text(active[2]));
+    assert.deepEqual(active[3].update.details.usage, active[2].update.details.usage);
+    assert.equal(results[0].details.usage.input, 12);
+    assert.equal(results[0].details.usage.turns, 3);
+    assert.equal(results[0].usage.cost.total, 0.03);
+    const quiet = updates[1];
+    assert.ok(quiet.length >= 4);
+    assert.ok(quiet.every((entry) => text(entry) === "No tool starts yet"));
+    for (const [index, entries] of updates.entries()) {
+      assert.ok(entries[0].at < 100, `call ${index} must publish its initial state immediately`);
+      // No event-driven renders between ticks, including terminal message events.
+      for (const [tick, entry] of entries.entries()) {
+        const elapsed = entry.at - entries[0].at;
+        assert.ok(Math.abs(elapsed - tick * 1_000) < 400, `call ${index}, tick ${tick}: ${elapsed}ms`);
+        assert.doesNotMatch(text(entry), /Last activity|Waiting for first activity/);
+        if (tick > 0) assert.ok(entry.update.details.durationMs > entries[tick - 1].update.details.durationMs);
+      }
+      assert.ok(entries.every((entry) => entry.update.details.model === `provider/model-${index}`));
+      for (const [otherIndex, schedule] of schedules.entries()) {
+        if (otherIndex === index) continue;
+        assert.ok(entries.every((entry) => !text(entry).includes(`${schedule.label}.ts`)
+          && !text(entry).includes(`Latest commentary: ${schedule.label}`)));
+      }
+      const rendered = renderText(tool.renderResult(entries[0].update, { expanded: false, isPartial: true }, plainTheme, {}));
+      assert.match(rendered, new RegExp(`Scout · model-${index} · low · .*Running`));
+    }
+    const counts = updates.map((entries) => entries.length);
+    await delay(1_100);
+    assert.deepEqual(updates.map((entries) => entries.length), counts);
+  } finally {
+    clearTimeout(abortTimer);
+    controller.abort();
+    if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
+    else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
+  }
+});
+
+test("elapsed time advances during silence and throwing display observers cannot fail runs", async () => {
+  const tool = registeredTool();
+  const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
+  process.env.PI_DELEGATOR_PI_BINARY = resolve("test/fixtures/heartbeat-pi.mjs");
+  const updates = [];
+  try {
+    const result = await tool.execute("observer", { agent: "scout", task: JSON.stringify({ label: "observer", finishMs: 3_350 }) },
+      undefined, (update) => { updates.push(update); throw new Error("display failed"); }, context(process.cwd()));
+    assert.equal(result.content[0].text, "observer complete");
+    assert.ok(updates.length >= 4);
+    assert.equal(updates[3].content[0].text, updates[2].content[0].text);
+    assert.ok(updates[3].details.durationMs > updates[2].details.durationMs);
+    assert.ok(updates.every((update) => !/Last activity|Waiting for first activity/.test(update.content[0].text)));
+    const count = updates.length;
+    await delay(1_100);
+    assert.equal(updates.length, count);
+  } finally {
+    if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
+    else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
+  }
+});
+
+test("heartbeat stops on child, protocol, spawn, and pre-aborted failures", async () => {
+  const tool = registeredTool();
+  const previousBinary = process.env.PI_DELEGATOR_PI_BINARY;
+  const updates = [[], [], [], []];
+  try {
+    process.env.PI_DELEGATOR_PI_BINARY = resolve("test/fixtures/heartbeat-pi.mjs");
+    await Promise.all(["child", "protocol"].map((failure, index) => assert.rejects(
+      tool.execute(failure, { agent: "scout", task: JSON.stringify({ label: failure, failure, finishMs: 1_150, activity: false }) },
+        undefined, (update) => updates[index].push(update), context(process.cwd())),
+      failure === "protocol" ? /\[protocol_error\]/ : /\[missing_terminal_answer\]/,
+    )));
+    process.env.PI_DELEGATOR_PI_BINARY = "/missing/pi-heartbeat";
+    await assert.rejects(tool.execute("spawn", { agent: "scout", task: "fail" }, undefined,
+      (update) => updates[2].push(update), context(process.cwd())), /\[spawn_failed\]/);
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(tool.execute("abort", { agent: "scout", task: "fail" }, controller.signal,
+      (update) => updates[3].push(update), context(process.cwd())), /\[cancelled\]/);
+    const counts = updates.map((entries) => entries.length);
+    assert.ok(counts.every((count) => count >= 1));
+    assert.ok(counts[0] >= 2 && counts[1] >= 2, "child and protocol failures must exercise an active timer");
+    await delay(1_100);
+    assert.deepEqual(updates.map((entries) => entries.length), counts);
   } finally {
     if (previousBinary === undefined) delete process.env.PI_DELEGATOR_PI_BINARY;
     else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
