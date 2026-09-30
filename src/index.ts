@@ -6,7 +6,7 @@ import { type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-import { classifyBashTool } from "./bash-classification.ts";
+import { compactDisplayText, formatProgress, terminalSafe, type ProgressSummary } from "./display.ts";
 import {
   getDelegateProfile,
   type DelegateProfile,
@@ -30,9 +30,6 @@ import {
 
 export { MAX_MODEL_BYTES } from "./config.ts";
 export const MAX_TASK_BYTES = 32 * 1024;
-const MAX_PROGRESS_TOOL_NAME_CODEPOINTS = 12;
-const MAX_RECENT_PROGRESS_TOOLS = 6;
-const MAX_PROGRESS_ASSISTANT_CODEPOINTS = 240;
 const MAX_COLLAPSED_RESULT_LINES = 10;
 const MAX_COLLAPSED_RESULT_CODEPOINTS = 1_000;
 
@@ -139,27 +136,6 @@ function progressDetails(
   };
 }
 
-interface ProgressSummary {
-  totalCalls: number;
-  readonly recentTools: string[];
-  latestAssistantText?: string;
-}
-
-function compactAssistantText(text: string): string | undefined {
-  const normalized = text.replace(/\s+/gu, " ").trim();
-  if (normalized.length === 0) return undefined;
-  const codepoints = Array.from(normalized);
-  return codepoints.length <= MAX_PROGRESS_ASSISTANT_CODEPOINTS
-    ? normalized
-    : `${codepoints.slice(0, MAX_PROGRESS_ASSISTANT_CODEPOINTS).join("")}…`;
-}
-
-function compactToolName(toolName: string): string {
-  const codepoints = Array.from(toolName);
-  if (codepoints.length <= MAX_PROGRESS_TOOL_NAME_CODEPOINTS) return toolName;
-  return `${codepoints.slice(0, MAX_PROGRESS_TOOL_NAME_CODEPOINTS).join("")}…`;
-}
-
 function profileLabel(profile: DelegateProfile | DelegateProfile["name"]): string {
   const name = typeof profile === "string" ? profile : profile.name;
   return `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
@@ -186,7 +162,7 @@ function resultText(content: readonly { readonly type: string; readonly text?: s
 
 function formatRenderedOutput(output: string, expanded: boolean, theme: Theme): string {
   if (!output) return "";
-  const lines = output.split(/\r\n?|\n/u);
+  const lines = terminalSafe(output).split(/\r\n?|\n/u);
   if (expanded) return lines.map((line) => theme.fg("toolOutput", line)).join("\n");
 
   const displayed = lines.slice(0, MAX_COLLAPSED_RESULT_LINES);
@@ -209,6 +185,7 @@ function formatRenderedResult(
   content: readonly { readonly type: string; readonly text?: string }[],
   details: DelegateDetails,
   expanded: boolean,
+  isPartial: boolean,
   theme: Theme,
 ): string {
   const model = details.model === undefined
@@ -217,48 +194,10 @@ function formatRenderedResult(
       ? details.model
       : compactModelSelector(details.model);
   const header =
-    theme.fg("toolTitle", theme.bold(profileLabel(details.agent))) +
-    theme.fg("muted", ` · ${model} · ${details.thinking} · ${formatDuration(details.durationMs)}`);
-  const output = formatRenderedOutput(resultText(content), expanded, theme);
+    theme.fg("toolTitle", theme.bold(compactDisplayText(profileLabel(details.agent), 64))) +
+    theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${formatDuration(details.durationMs)}${isPartial ? " · Running" : ""}`);
+  const output = formatRenderedOutput(resultText(content), expanded || isPartial, theme);
   return output ? `${header}\n${output}` : header;
-}
-
-function formatProgress(
-  progress: DelegateProgress,
-  summary: ProgressSummary,
-): string {
-  if (progress.type === "tool_start") {
-    summary.totalCalls += 1;
-    const displayName = progress.toolName === "bash"
-      ? classifyBashTool(progress.args)
-      : compactToolName(progress.toolName);
-    summary.recentTools.push(displayName);
-    if (summary.recentTools.length > MAX_RECENT_PROGRESS_TOOLS) summary.recentTools.shift();
-  } else if (progress.text !== undefined) {
-    const latestAssistantText = compactAssistantText(progress.text);
-    if (latestAssistantText !== undefined) summary.latestAssistantText = latestAssistantText;
-  }
-
-  let tools = "Working · no tool calls yet";
-  if (summary.totalCalls > 0) {
-    const runs: Array<{ name: string; count: number }> = [];
-    for (const toolName of summary.recentTools) {
-      const previous = runs.at(-1);
-      if (previous?.name === toolName) previous.count += 1;
-      else runs.push({ name: toolName, count: 1 });
-    }
-    const order = runs
-      .map(({ name, count }) => count === 1 ? name : `${name} ×${count}`)
-      .join(" → ");
-    const omitted = summary.totalCalls - summary.recentTools.length;
-    const earlier = omitted === 0 ? "" : `… ${omitted} earlier → `;
-    const calls = summary.totalCalls === 1 ? "tool call" : "tool calls";
-    tools = `${summary.totalCalls} ${calls}: ${earlier}${order}`;
-  }
-
-  return summary.latestAssistantText === undefined
-    ? tools
-    : `${tools}\nLatest: ${summary.latestAssistantText}`;
 }
 
 async function resolveWorkingDirectory(requested: string | undefined, parentCwd: string): Promise<string> {
@@ -325,7 +264,7 @@ function registerDelegateTool(
           : {
               onProgress: (progress: DelegateProgress) => {
                 onUpdate({
-                  content: [{ type: "text", text: formatProgress(progress, progressSummary) }],
+                  content: [{ type: "text", text: formatProgress(progress, progressSummary, cwd) }],
                   details: progressDetails(
                     profile,
                     model,
@@ -349,11 +288,16 @@ function registerDelegateTool(
       };
     },
 
-    renderResult(result, { expanded }, theme, _context) {
+    renderCall(args, theme, _context) {
+      const task = typeof args.task === "string" ? compactDisplayText(args.task, 240) : "…";
+      return new Text(theme.fg("toolTitle", theme.bold("Delegate")) + "\n" + theme.fg("toolOutput", task) + "\n", 0, 0);
+    },
+
+    renderResult(result, { expanded, isPartial }, theme, _context) {
       const details = result.details as DelegateDetails | undefined;
       const text = details === undefined
         ? formatRenderedOutput(resultText(result.content), expanded, theme)
-        : formatRenderedResult(result.content, details, expanded, theme);
+        : formatRenderedResult(result.content, details, expanded, isPartial, theme);
       return new Text(text, 0, 0);
     },
   });

@@ -152,6 +152,28 @@ test("renders selected delegate model and thinking metadata without changing res
   assert.deepEqual(content, [{ type: "text", text: Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") }]);
 });
 
+test("renders readable safe tasks and unclipped live activity with model and thinking", () => {
+  const tool = registeredTool();
+  const call = renderText(tool.renderCall({ agent: "worker", task: "Inspect\n source\x1b[31m now\x1b[0m\u202e", model: "private", cwd: "/private" }, plainTheme, {}));
+  assert.equal(call, "Delegate\nInspect source now\n");
+  assert.doesNotMatch(call, /private|task:|cwd:/);
+  const longCall = renderText(tool.renderCall({ task: "😀".repeat(500) }, plainTheme, {}), 80);
+  assert.equal(Array.from(longCall.replace(/\n/g, "").slice("Delegate".length)).length, 241);
+  const output = `Recent tool starts · 4 total\n${Array.from({ length: 4 }, (_, i) => `${i === 3 ? "→" : "·"} read ${"x".repeat(160)}${i}:9007199254740991`).join("\n")}\n\nLatest commentary: ${"c".repeat(240)}END`;
+  const content = [{ type: "text", text: output }];
+  const details = { agent: "worker", model: "provider/model", thinking: "high", durationMs: 10 };
+  for (const expanded of [false, true]) {
+    const partial = renderText(tool.renderResult({ content, details }, { expanded, isPartial: true }, plainTheme, {}), 40);
+    assert.match(partial.replace(/\n/g, " "), new RegExp(`^Worker · ${expanded ? "provider/" : ""}model · high · 10ms · Running`));
+    assert.match(partial, /END$/);
+    assert.doesNotMatch(partial, /preview truncated|expand to view/);
+  }
+  const final = renderText(tool.renderResult({ content, details }, { expanded: false, isPartial: false }, plainTheme, {}));
+  assert.doesNotMatch(final, /Running/);
+  assert.match(final, /preview truncated/);
+  assert.equal(content[0].text, output);
+});
+
 test("fixed profiles expose their thinking, no default deadlines, and tools", () => {
   assert.deepEqual(
     [SCOUT_PROFILE, REVIEWER_PROFILE, ORACLE_PROFILE, TESTER_PROFILE, WORKER_PROFILE].map((profile) => ({
@@ -260,17 +282,31 @@ test("applies a model override while preserving profile thinking and streams com
     assert.equal(result.details.model, "override/model");
     assert.equal(result.details.thinking, "high");
     assert.deepEqual(updates.map((update) => update.content[0].text), [
-      "Working · no tool calls yet\nLatest: Inspecting code",
-      "1 tool call: read\nLatest: Inspecting code",
-      "2 tool calls: read → grep\nLatest: Inspecting code",
-      "3 tool calls: read → grep → read\nLatest: Inspecting code",
-      "4 tool calls: read → grep → read ×2\nLatest: Inspecting code",
-      "5 tool calls: read → grep → read ×2 → bash(pnpm test)\nLatest: Inspecting code",
-      "6 tool calls: read → grep → read ×2 → bash(pnpm test) → find\nLatest: Inspecting code",
-      "7 tool calls: … 1 earlier → grep → read ×2 → bash(pnpm test) → find → ls\nLatest: Inspecting code",
-      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…\nLatest: Inspecting code",
-      "8 tool calls: … 2 earlier → read ×2 → bash(pnpm test) → find → ls → 工具工具工具工具工具工具…\nLatest: Review complete",
-    ]);
+      "No tool starts yet\nLatest commentary: Inspecting code",
+      "Recent tool starts · 1 total\n→ read src\nLatest commentary: Inspecting code",
+      "Recent tool starts · 2 total\n· read src\n→ grep\nLatest commentary: Inspecting code",
+      "Recent tool starts · 3 total\n· read src\n· grep\n→ read test\nLatest commentary: Inspecting code",
+      "Recent tool starts · 4 total\n· read src\n· grep\n· read test\n→ read docs\nLatest commentary: Inspecting code",
+      "Recent tool starts · 5 total · 1 earlier\n· grep\n· read test\n· read docs\n→ bash(pnpm test)\nLatest commentary: Inspecting code",
+      "Recent tool starts · 6 total · 2 earlier\n· read test\n· read docs\n· bash(pnpm test)\n→ find\nLatest commentary: Inspecting code",
+      "Recent tool starts · 7 total · 3 earlier\n· read docs\n· bash(pnpm test)\n· find\n→ ls .\nLatest commentary: Inspecting code",
+      "Recent tool starts · 8 total · 4 earlier\n· bash(pnpm test)\n· find\n· ls .\n→ 工具工具工具工具工具工具…\nLatest commentary: Inspecting code",
+      "Recent tool starts · 8 total · 4 earlier\n· bash(pnpm test)\n· find\n· ls .\n→ 工具工具工具工具工具工具…\nLatest commentary: Review complete",
+    ].map((text) => text.replace("\nLatest commentary:", "\n\nLatest commentary:")));
+    delete process.env.FAKE_PI_RECORD_PATH;
+    const siblingUpdates = [[], []];
+    const siblings = await Promise.all(["first/model-a", "second/model-b"].map((model, index) =>
+      tool.execute(`sibling-${index}`, { agent: "scout", task: "Inspect independently", model }, undefined,
+        (update) => siblingUpdates[index].push(update), context(directory)),
+    ));
+    for (const [index, model] of ["first/model-a", "second/model-b"].entries()) {
+      assert.equal(siblings[index].details.model, model);
+      assert.equal(siblingUpdates[index].length, 10);
+      assert.ok(siblingUpdates[index].every((update) => update.details.model === model));
+      assert.equal(siblingUpdates[index].at(-1).content[0].text, updates.at(-1).content[0].text);
+    }
+    assert.notEqual(siblingUpdates[0][0].details, siblingUpdates[1][0].details);
+    assert.equal(result.content[0].text, "Review complete");
     assert.equal(updates.at(-1).details.usage.turns, 2);
     assert.equal(result.details.usage.input, 8);
     assert.equal(result.details.usage.cost, 0.03);
@@ -334,7 +370,7 @@ test("returns an explicit truncation marker in model-facing tool content", async
     );
 
     assert.equal(updates.length, 1);
-    const preview = updates[0].content[0].text.replace("Working · no tool calls yet\nLatest: ", "");
+    const preview = updates[0].content[0].text.replace("No tool starts yet\n\nLatest commentary: ", "");
     assert.equal(Array.from(preview).length, 241);
     assert.equal(preview, `${"😀".repeat(240)}…`);
     assert.equal(result.details.truncated, true);

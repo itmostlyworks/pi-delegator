@@ -2,6 +2,14 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.6.1] - 2026-09-30
+
+### Changed
+
+- Replaced raw delegate invocation rendering with a readable, bounded task preview and spacing after the prompt.
+- Running results retain model and thinking metadata above a four-row recent tool-start window with bounded file targets and separated visible assistant commentary. The latest-start marker does not imply that a tool is still executing.
+- Sanitized terminal display text; shell commands remain classified, and search patterns and unknown-tool arguments are omitted. Final model-visible responses and subprocess lifecycle behavior are unchanged.
+
 ## [0.6.0] - 2026-09-30
 
 ### Changed
