@@ -181,6 +181,8 @@ Prefer small fixture scripts over mocks of `node:child_process`; real processes 
 
 - each bundled or configured profile emits its expected model/thinking/tools/prompt arguments
 - effective names and descriptions appear in the tool schema after add/replace/disable resolution
+- optional display names are trimmed, nonblank, and bounded to 256 UTF-8 bytes; calls, progress, final headers, and runner diagnostics use them while schema/result identifiers stay unchanged
+- stored details preserve optional display names; labels without them title-case hyphen-separated identifiers, independent of registry lookup
 - call model overrides replace profile defaults for only that call, including concurrent calls; thinking overrides are absent from the tool schema; no caller deadline input exists
 - invalid or oversized model overrides are rejected
 - omitted/null configured deadline, explicit prior positive values, and Node timer maximum are tested

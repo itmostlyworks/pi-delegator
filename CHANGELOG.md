@@ -2,6 +2,17 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.6.4] - 2026-10-01
+
+### Added
+
+- Optional profile `displayName` for human-facing delegate labels, preserved in progress and result details without changing tool identifiers.
+
+### Changed
+
+- Hyphenated profile identifiers display as readable titles by default (for example, `interaction-designer` becomes `Interaction Designer`).
+- Delegate call headers and runner diagnostics use the same profile labels as results.
+
 ## [0.6.3] - 2026-09-30
 
 ### Changed

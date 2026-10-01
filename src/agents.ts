@@ -16,6 +16,7 @@ export type DelegateThinkingLevel = (typeof DELEGATE_THINKING_LEVELS)[number];
 
 export interface DelegateProfile {
   readonly name: string;
+  readonly displayName?: string;
   readonly description: string;
   readonly model: string | null;
   readonly tools: readonly string[];
@@ -28,6 +29,13 @@ export interface DelegateProfile {
 }
 
 export type DelegateProfileRegistry = Readonly<Record<string, DelegateProfile>>;
+
+/** Human-facing label only; identifiers remain unchanged in schemas and results. */
+export function profileLabel(name: string, displayName?: string): string {
+  return displayName ?? name.split("-").map((word) =>
+    `${word.charAt(0).toUpperCase()}${word.slice(1)}`
+  ).join(" ");
+}
 
 function loadPrompt(name: (typeof DELEGATE_AGENT_NAMES)[number]): string {
   const prompt = readFileSync(new URL(`../agents/${name}.md`, import.meta.url), "utf8");

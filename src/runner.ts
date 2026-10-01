@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Usage } from "@earendil-works/pi-ai";
 
-import type { DelegateProfile } from "./agents.ts";
+import { profileLabel as getProfileLabel, type DelegateProfile } from "./agents.ts";
 import {
   DELEGATE_BASH_ABORT_EXIT_CODE,
   DELEGATE_BASH_CLEANUP_EXIT_CODE,
@@ -303,7 +303,7 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
   const timeoutMs = options.timeoutMs === undefined
     ? configuredTimeout
     : Math.min(configuredTimeout ?? options.timeoutMs, options.timeoutMs);
-  const profileLabel = `${options.profile.name.charAt(0).toUpperCase()}${options.profile.name.slice(1)}`;
+  const profileLabel = getProfileLabel(options.profile.name, options.profile.displayName);
 
   if (!isSupportedPlatform(process.platform)) {
     return {

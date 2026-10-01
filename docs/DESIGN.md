@@ -37,6 +37,7 @@ There is no manager process, worker-script DSL, run registry, or persistence lay
 - Defines the five immutable bundled profiles.
 - Loads packaged Markdown prompt bodies and exports the bundled registry.
 - Provides the normalized internal profile type shared by bundled and configured profiles.
+- Centralizes human-facing labels: optional `displayName`, otherwise title-cased hyphen-separated identifiers. TUI calls/results and runner diagnostics share this helper.
 
 ### `src/config.ts`
 
@@ -50,6 +51,7 @@ Suggested profile type:
 ```ts
 interface DelegateProfile {
   name: string;
+  displayName?: string; // trimmed, nonblank, at most 256 UTF-8 bytes
   description: string;
   model: string | null;
   tools: readonly string[];
@@ -244,7 +246,8 @@ Suggested successful details:
 
 ```ts
 interface DelegateResultDetails {
-  agent: string;
+  agent: string; // stable profile identifier
+  displayName?: string; // retained for rendering without registry lookup
   model?: string;
   thinking: string; // effective configured or built-in level
   durationMs: number;

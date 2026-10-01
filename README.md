@@ -120,6 +120,7 @@ The five bundled profiles above remain available without configuration. To add, 
       "deadlineMs": null
     },
     "docs": {
+      "displayName": "Documentation Specialist",
       "description": "Inspect and improve documentation",
       "model": null,
       "thinking": "medium",
@@ -133,7 +134,9 @@ The five bundled profiles above remain available without configuration. To add, 
 }
 ```
 
-`null` disables a name. An object atomically replaces any bundled profile of the same name and must contain all fields shown except optional `deadlineMs`; profiles never inherit or merge fields. `model: null` inherits the parent model. Prompt and capability paths resolve relative to the configuration file. `skills` accepts explicit local Markdown skill files or skill directories; `extensions` accepts explicit local JavaScript or TypeScript extension files. Remote package sources are not supported. Omit `deadlineMs` or set it to `null` to disable the overall run timer. Explicit positive integer values (including those in existing configurations) remain active, up to Node's timer maximum of 2,147,483,647 ms. `delegate` cannot appear in `tools`, and `extensions` cannot load pi-delegator itself.
+`null` disables a name. An object atomically replaces any bundled profile of the same name and must contain all fields shown except optional `deadlineMs` and `displayName`; profiles never inherit or merge fields. `model: null` inherits the parent model. Prompt and capability paths resolve relative to the configuration file. `skills` accepts explicit local Markdown skill files or skill directories; `extensions` accepts explicit local JavaScript or TypeScript extension files. Remote package sources are not supported. Omit `deadlineMs` or set it to `null` to disable the overall run timer. Explicit positive integer values (including those in existing configurations) remain active, up to Node's timer maximum of 2,147,483,647 ms. `delegate` cannot appear in `tools`, and `extensions` cannot load pi-delegator itself.
+
+Optional `displayName` is a nonblank string, trimmed and limited to 256 UTF-8 bytes. Calls, progress, final TUI headers, and runner diagnostics use it; otherwise hyphen-separated identifiers are title-cased (`interaction-designer` → `Interaction Designer`). The tool's `agent` identifiers remain unchanged, and results retain the optional name for later rendering.
 
 Configuration is validated and loaded once per session. Missing, unreadable, unsupported, or duplicate capability paths and invalid or legacy partial configuration prevent delegation with an actionable source/profile diagnostic. Start a new Pi session after editing it.
 

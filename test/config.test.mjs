@@ -11,6 +11,7 @@ import {
   loadDelegateProfiles,
   MAX_CONFIG_BYTES,
   MAX_MODEL_BYTES,
+  MAX_DISPLAY_NAME_BYTES,
   MAX_PROFILE_DEADLINE_MS,
   MAX_PROMPT_BYTES,
 } from "../src/config.ts";
@@ -83,6 +84,26 @@ test("missing config preserves the five immutable bundled profiles and Pi agent 
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await fixture.cleanup();
+  }
+});
+
+test("optional display names are trimmed, bounded UTF-8 strings without changing identifiers", async () => {
+  const fixture = await temporaryConfig();
+  try {
+    for (const displayName of [undefined, "  Interaction Designer  ", "é".repeat(MAX_DISPLAY_NAME_BYTES / 2)]) {
+      await writeFile(fixture.path, JSON.stringify({ profiles: {
+        "interaction-designer": completeProfile(displayName === undefined ? {} : { displayName }),
+      } }));
+      const profile = loadDelegateProfiles(fixture.path)["interaction-designer"];
+      assert.equal(profile.name, "interaction-designer");
+      assert.equal(profile.displayName, displayName?.trim());
+    }
+    for (const displayName of [null, 12, "", " \n ", "é".repeat(MAX_DISPLAY_NAME_BYTES / 2 + 1), " ".repeat(MAX_DISPLAY_NAME_BYTES) + "x"]) {
+      await writeFile(fixture.path, JSON.stringify({ profiles: { custom: completeProfile({ displayName }) } }));
+      assertConfigError(() => loadDelegateProfiles(fixture.path), fixture.path, "custom", /displayName.*(?:non-blank string|UTF-8 limit)/);
+    }
+  } finally {
     await fixture.cleanup();
   }
 });

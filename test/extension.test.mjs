@@ -152,10 +152,31 @@ test("renders selected delegate model and thinking metadata without changing res
   assert.deepEqual(content, [{ type: "text", text: Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n") }]);
 });
 
+test("renders profile display names in calls and stored results without registry lookup", () => {
+  const tool = registeredTool({ profiles: {
+    "interaction-designer": configuredProfile({ displayName: "UX Specialist" }),
+  } });
+  assert.equal(tool.parameters.properties.agent.enum.includes("interaction-designer"), true);
+  assert.equal(tool.parameters.properties.agent.enum.includes("UX Specialist"), false);
+  assert.match(renderText(tool.renderCall({ agent: "interaction-designer", task: "Inspect" }, plainTheme, {})), /^Delegate · UX Specialist\n/);
+  const unrelatedTool = registeredTool();
+  const content = [{ type: "text", text: "Answer" }];
+  for (const isPartial of [false, true]) {
+    for (const expanded of [false, true]) {
+      const details = { agent: "interaction-designer", displayName: "UX Specialist", thinking: "high", durationMs: 1 };
+      assert.match(renderText(unrelatedTool.renderResult({ content, details }, { expanded, isPartial }, plainTheme, {})), /^UX Specialist · /);
+      delete details.displayName;
+      assert.match(renderText(unrelatedTool.renderResult({ content, details }, { expanded, isPartial }, plainTheme, {})), /^Interaction Designer · /);
+      details.displayName = "Custom\x1b[31m name\x1b[0m\u202e";
+      assert.match(renderText(unrelatedTool.renderResult({ content, details }, { expanded, isPartial }, plainTheme, {})), /^Custom name · /);
+    }
+  }
+});
+
 test("renders readable safe tasks and unclipped live activity with model and thinking", () => {
   const tool = registeredTool();
   const call = renderText(tool.renderCall({ agent: "worker", task: "Inspect\n source\x1b[31m now\x1b[0m\u202e", model: "private", cwd: "/private" }, plainTheme, {}));
-  assert.equal(call, "Delegate\nInspect source now\n");
+  assert.equal(call, "Delegate · Worker\nInspect source now\n");
   assert.doesNotMatch(call, /private|task:|cwd:/);
   const longCall = renderText(tool.renderCall({ task: "😀".repeat(500) }, plainTheme, {}), 80);
   assert.equal(Array.from(longCall.replace(/\n/g, "").slice("Delegate".length)).length, 241);
@@ -407,9 +428,9 @@ test("advertises and launches the immutable effective registry with isolated mod
   const tool = registeredTool({
     profiles: {
       scout: null,
-      reviewer: configuredProfile({ description: "Replacement reviewer" }),
+      reviewer: configuredProfile({ description: "Replacement reviewer", displayName: "Code Auditor" }),
       custom: configuredProfile({ description: "Custom verifier", model: null, thinking: "medium", tools: ["read"] }),
-      short: configuredProfile({ description: "Short deadline", deadlineMs: 40 }),
+      short: configuredProfile({ description: "Short deadline", deadlineMs: 40, displayName: "Quick Check" }),
     },
   });
   assert.deepEqual(tool.parameters.properties.agent.enum, ["reviewer", "oracle", "tester", "worker", "custom", "short"]);
@@ -433,13 +454,18 @@ test("advertises and launches the immutable effective registry with isolated mod
     const promptPath = join(directory, "prompt.md");
     process.env.FAKE_PI_RECORD_PATH = configuredPath;
     process.env.FAKE_PI_PROMPT_CONTENT_PATH = promptPath;
+    const updates = [];
     const configured = await tool.execute(
       "configured",
       { agent: "reviewer", task: "Review" },
       undefined,
-      undefined,
+      (update) => updates.push(update),
       context(directory),
     );
+    assert.equal(configured.details.agent, "reviewer");
+    assert.equal(configured.details.displayName, "Code Auditor");
+    assert.equal(updates[0].details.agent, "reviewer");
+    assert.equal(updates[0].details.displayName, "Code Auditor");
     assert.equal(configured.details.model, "configured/default");
     assert.equal(configured.details.thinking, "minimal");
     const configuredArgs = JSON.parse(await readFile(configuredPath, "utf8"));
@@ -467,7 +493,7 @@ test("advertises and launches the immutable effective registry with isolated mod
     process.env.FAKE_PI_DELAY_MS = "100";
     await assert.rejects(
       tool.execute("short", { agent: "short", task: "Wait" }, undefined, undefined, context(directory)),
-      /\[run_timeout\].*40 ms/,
+      /\[run_timeout\].*Quick Check exceeded its 40 ms/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

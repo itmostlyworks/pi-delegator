@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { compactDisplayText, formatProgress, renderProgress, terminalSafe, type ProgressSummary } from "./display.ts";
 import {
   getDelegateProfile,
+  profileLabel,
   type DelegateProfile,
   type DelegateProfileRegistry,
   type DelegateThinkingLevel,
@@ -70,6 +71,7 @@ function createDelegateParameters(profiles: DelegateProfileRegistry) {
 
 export interface DelegateDetails {
   readonly agent: DelegateProfile["name"];
+  readonly displayName?: string;
   readonly thinking: DelegateThinkingLevel;
   readonly model?: string;
   readonly durationMs: number;
@@ -99,6 +101,7 @@ function successDetails(
 ): DelegateDetails {
   return {
     agent: profile.name,
+    ...(profile.displayName === undefined ? {} : { displayName: profile.displayName }),
     thinking,
     ...(model === undefined ? {} : { model }),
     durationMs: result.durationMs,
@@ -120,6 +123,7 @@ function progressDetails(
 ): DelegateDetails {
   return {
     agent: profile.name,
+    ...(profile.displayName === undefined ? {} : { displayName: profile.displayName }),
     thinking,
     ...(model === undefined ? {} : { model }),
     durationMs,
@@ -135,11 +139,6 @@ function progressDetails(
       pipesClosed: false,
     },
   };
-}
-
-function profileLabel(profile: DelegateProfile | DelegateProfile["name"]): string {
-  const name = typeof profile === "string" ? profile : profile.name;
-  return `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
 }
 
 function compactModelSelector(model: string): string {
@@ -195,7 +194,7 @@ function formatRenderedResult(
       ? details.model
       : compactModelSelector(details.model);
   const header =
-    theme.fg("toolTitle", theme.bold(compactDisplayText(profileLabel(details.agent), 64))) +
+    theme.fg("toolTitle", theme.bold(compactDisplayText(profileLabel(details.agent, details.displayName), 64))) +
     theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${formatDuration(details.durationMs)}${isPartial ? " · Running" : ""}`);
   const output = formatRenderedOutput(
     expanded && isPartial && details.expandedProgress !== undefined
@@ -321,7 +320,12 @@ function registerDelegateTool(
       const task = typeof args.task === "string"
         ? context.expanded ? terminalSafe(args.task) : compactDisplayText(args.task, 240)
         : "…";
-      return new Text(theme.fg("toolTitle", theme.bold("Delegate")) + "\n" + theme.fg("toolOutput", task) + "\n", 0, 0);
+      const name = typeof args.agent === "string" ? args.agent : undefined;
+      const profile = name !== undefined && Object.hasOwn(profiles, name) ? profiles[name] : undefined;
+      const title = name === undefined
+        ? "Delegate"
+        : `Delegate · ${compactDisplayText(profileLabel(name, profile?.displayName), 64)}`;
+      return new Text(theme.fg("toolTitle", theme.bold(title)) + "\n" + theme.fg("toolOutput", task) + "\n", 0, 0);
     },
 
     renderResult(result, { expanded, isPartial }, theme, _context) {

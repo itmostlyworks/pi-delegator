@@ -27,6 +27,7 @@ export const MAX_CONFIG_BYTES = 16 * 1024;
 export const MAX_MODEL_BYTES = 256;
 export const MAX_PROFILE_NAME_BYTES = 64;
 export const MAX_DESCRIPTION_BYTES = 512;
+export const MAX_DISPLAY_NAME_BYTES = 256;
 export const MAX_PROMPT_BYTES = 64 * 1024;
 export const MAX_PROFILE_DEADLINE_MS = 2_147_483_647;
 const REQUIRED_PROFILE_FIELDS = [
@@ -38,7 +39,7 @@ const REQUIRED_PROFILE_FIELDS = [
   "skills",
   "extensions",
 ] as const;
-const PROFILE_FIELDS = [...REQUIRED_PROFILE_FIELDS, "deadlineMs"] as const;
+const PROFILE_FIELDS = [...REQUIRED_PROFILE_FIELDS, "deadlineMs", "displayName"] as const;
 const PROFILE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
 const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/u;
 const REMOTE_CAPABILITY_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:/u;
@@ -113,7 +114,7 @@ function decodeJson(path: string, bytes: Buffer): unknown {
 function requiredString(
   path: string,
   profileName: string,
-  field: "description" | "prompt",
+  field: "description" | "prompt" | "displayName",
   value: unknown,
   maximumBytes?: number,
 ): string {
@@ -330,6 +331,9 @@ function parseProfile(path: string, profileName: string, value: unknown): Delega
 
   return createDelegateProfile({
     name: profileName,
+    ...(Object.hasOwn(value, "displayName")
+      ? { displayName: requiredString(path, profileName, "displayName", value.displayName, MAX_DISPLAY_NAME_BYTES) }
+      : {}),
     description,
     model,
     thinking: value.thinking as DelegateThinkingLevel,
