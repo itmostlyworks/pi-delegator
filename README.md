@@ -10,6 +10,10 @@ pi install npm:@mostlyworks/pi-delegator
 
 Start a new Pi session. Requires an authenticated model provider, Node.js 22.19.0+, and Linux or macOS. Windows is not supported.
 
+## Demo
+
+https://github.com/user-attachments/assets/05cfbc05-2d72-40ca-b65e-f8cc33a4ef12
+
 ## Use
 
 Ask Pi:
