@@ -160,6 +160,10 @@ Completion, cancellation, and an opted-in run deadline clean up all owned same-s
 
 This is not a sandbox: deliberately escaping the POSIX session is outside containment, and regrouping inside a command can escape command-local cleanup. Abruptly killing the parent is not equivalent to cancellation. The runner requires usable `ps sess` identifiers and fails early without them. Native macOS verification remains outstanding; see the [design](docs/DESIGN.md) and [smoke checks](docs/SMOKE_TEST.md).
 
+### Launch failure diagnostics
+
+Session-capture failures include the failed safety checks, observed gate/parent PID, PGID, session key and status, OS release, architecture, Node/libuv versions, and the exact `ps` invocation. Fields are bounded; command lines and environment values are not included. When reporting an intermittent failure, paste the complete error and cleanup diagnostic, the installed package version, and whether calls were concurrent. Cleanup signal errors identify the signal and group, and distinguish a group verified gone from unverified cleanup. These diagnostics do not relax launch safety checks.
+
 ### Output bounds
 
 Model-visible output is bounded:

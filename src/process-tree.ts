@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { release } from "node:os";
 
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_VERIFY_MS = 1_000;
@@ -69,17 +70,34 @@ function snapshot(): Snapshot {
   return rows;
 }
 
+// Keep failure evidence bounded and single-line; never include command lines or environment.
+function captureContext(pid: number, target?: ProcessRow, parent?: ProcessRow): string {
+  const field = (value: string): string => JSON.stringify(value.slice(0, 80));
+  const row = (value: ProcessRow | undefined): string => value
+    ? `{pid=${value.pid},pgid=${value.pgid},sess=${field(value.sess)},stat=${field(value.stat)}}`
+    : "missing";
+  return `gatePid=${pid}; parentPid=${process.pid}; gate=${row(target)}; parent=${row(parent)}; ` +
+    `platform=${process.platform}; release=${field(release())}; arch=${process.arch}; ` +
+    `node=${process.version}; uv=${process.versions.uv ?? "unknown"}; ps="ps -axo pid=,pgid=,sess=,stat="`;
+}
+
 /** Capture the POSIX session while the detached launch gate is still alive. */
 export function captureProcessSession(pid: number): string {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`Invalid launch gate pid ${pid}`);
   const rows = snapshot();
-  if ("diagnostic" in rows) throw new Error(`Cannot capture launch gate session: ${rows.diagnostic}`);
+  if ("diagnostic" in rows) throw new Error(`Cannot capture launch gate session: ${rows.diagnostic}; ${captureContext(pid)}`);
   const target = rows.find((row) => row.pid === pid);
   const parent = rows.find((row) => row.pid === process.pid);
-  if (!target || !parent) throw new Error("Cannot capture launch gate session: gate or parent missing from ps; keep the gate alive until capture completes");
-  if (target.pid !== target.pgid || !usableSessionKey(target.sess) ||
-      !usableSessionKey(parent.sess) || target.sess === parent.sess) {
-    throw new Error("Unsafe launch gate session: expected a group leader with an unmasked, nonzero session distinct from the parent; keep the detached gate alive and check ps sess support");
+  const context = captureContext(pid, target, parent);
+  if (!target || !parent) throw new Error(`Cannot capture launch gate session: gate or parent missing from ps; keep the gate alive until capture completes; ${context}`);
+  const failedChecks = [
+    target.pid !== target.pgid ? "gate_not_group_leader" : undefined,
+    !usableSessionKey(target.sess) ? "gate_session_unusable" : undefined,
+    !usableSessionKey(parent.sess) ? "parent_session_unusable" : undefined,
+    target.sess === parent.sess ? "session_matches_parent" : undefined,
+  ].filter((value) => value !== undefined);
+  if (failedChecks.length > 0) {
+    throw new Error(`Unsafe launch gate session: expected a group leader with an unmasked, nonzero session distinct from the parent; failed checks=${failedChecks.join(",")}; ${context}`);
   }
   return target.sess;
 }
@@ -217,7 +235,9 @@ export function createProcessTreeController(
             termSent: term === "sent",
             killSent: false,
             processGroupGone: true,
-            ...(typeof term === "object" ? { diagnostic: term.diagnostic } : {}),
+            ...(typeof term === "object"
+              ? { diagnostic: `SIGTERM group ${processGroupId}: ${term.diagnostic.slice(0, 160)}; group verified gone` }
+              : {}),
           };
         }
 
@@ -227,8 +247,9 @@ export function createProcessTreeController(
           options.killVerifyMs ?? DEFAULT_KILL_VERIFY_MS,
         );
         const diagnostics = [
-          typeof term === "object" ? `SIGTERM: ${term.diagnostic}` : undefined,
-          typeof kill === "object" ? `SIGKILL: ${kill.diagnostic}` : undefined,
+          typeof term === "object" ? `SIGTERM group ${processGroupId}: ${term.diagnostic.slice(0, 160)}` : undefined,
+          typeof kill === "object" ? `SIGKILL group ${processGroupId}: ${kill.diagnostic.slice(0, 160)}` : undefined,
+          afterKill.gone ? (typeof term === "object" || typeof kill === "object" ? "group verified gone" : undefined) : "cleanup unverified",
           afterKill.gone ? undefined : afterTerm.diagnostic,
           afterKill.gone ? undefined : afterKill.diagnostic,
         ].filter((value): value is string => value !== undefined);
