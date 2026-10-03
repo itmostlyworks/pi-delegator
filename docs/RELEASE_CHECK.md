@@ -2,7 +2,7 @@
 
 **2026-10-03: all requested macOS checks passed with the local session-ID fix.**
 
-Tested 0.6.5 plus the local fix, based on checkout `f8208e1e8ebfe9c3f25ad88ab65c3bb10df74c7c`. npm 0.6.5 is published; the macOS fix has not been published.
+Tested the macOS fix on top of 0.6.5, based on checkout `f8208e1e8ebfe9c3f25ad88ab65c3bb10df74c7c`. The fix is included in 0.6.6. Release packaging checks were repeated after the version bump.
 
 ## Environment
 

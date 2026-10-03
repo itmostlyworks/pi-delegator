@@ -2,7 +2,7 @@
 
 All notable changes to `pi-delegator` are documented here.
 
-## [Unreleased]
+## [0.6.6] - 2026-10-03
 
 ### Fixed
 
