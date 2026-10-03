@@ -2,6 +2,14 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [0.6.5] - 2026-10-03
+
+### Changed
+
+- Launch-gate failures include bounded process/session and platform context plus the failed safety checks, without command lines or environment data.
+- Process-group cleanup diagnostics identify the affected group and distinguish verified termination from unverified cleanup.
+- Simplified the README around installation, usage, configuration, and limits.
+
 ## [0.6.4] - 2026-10-01
 
 ### Added
