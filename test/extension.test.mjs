@@ -767,7 +767,7 @@ test("one-second ticks coalesce activity and usage, advance quiet elapsed time, 
   const updates = [[], [], []];
   const starts = [0, 0, 0];
   const schedules = [
-    { label: "active" },
+    { label: "active", finishMs: 4_350 },
     { label: "quiet", activity: false, finishMs: 3_350 },
     { label: "cancelled", finishMs: 10_000 },
   ];
@@ -789,22 +789,27 @@ test("one-second ticks coalesce activity and usage, advance quiet elapsed time, 
     const active = updates[0];
     assert.equal(text(active[0]), "No tool starts yet");
     assert.ok(active.length >= 4, "real run must reach at least three display ticks");
-    assert.equal(text(active[1]), "Recent tool starts · 1 total\n→ read active.ts\n\nLatest commentary: active");
-    assert.equal(active[1].update.details.usage.input, 7);
-    assert.equal(active[1].update.details.usage.turns, 1);
-    assert.equal(active[1].update.details.usage.cost, 0.02);
-    assert.equal(text(active[2]), "Recent tool starts · 2 total\n· read active.ts\n→ grep\n\nLatest commentary: active follow-up");
-    assert.equal(active[2].update.details.usage.input, 12);
-    assert.equal(active[2].update.details.usage.turns, 2);
-    assert.equal(active[2].update.details.usage.cost, 0.03);
-    assert.equal(text(active[3]), text(active[2]));
-    assert.deepEqual(active[3].update.details.usage, active[2].update.details.usage);
+    // Launch sampling may span the first tick; assert observed phases rather
+    // than assuming the fixture started immediately when execute was called.
+    const first = active.findIndex((entry) => text(entry) === "Recent tool starts · 1 total\n→ read active.ts\n\nLatest commentary: active");
+    const second = active.findIndex((entry) => text(entry) === "Recent tool starts · 2 total\n· read active.ts\n→ grep\n\nLatest commentary: active follow-up");
+    assert.ok(first > 0 && second > first, "both activity phases must be rendered in order");
+    assert.equal(active[first].update.details.usage.input, 7);
+    assert.equal(active[first].update.details.usage.turns, 1);
+    assert.equal(active[first].update.details.usage.cost, 0.02);
+    assert.equal(active[second].update.details.usage.input, 12);
+    assert.equal(active[second].update.details.usage.turns, 2);
+    assert.equal(active[second].update.details.usage.cost, 0.03);
+    assert.ok(active[second + 1], "quiet time after activity must reach another tick");
+    assert.equal(text(active[second + 1]), text(active[second]));
+    assert.deepEqual(active[second + 1].update.details.usage, active[second].update.details.usage);
     assert.equal(results[0].details.usage.input, 12);
     assert.equal(results[0].details.usage.turns, 3);
     assert.equal(results[0].usage.cost.total, 0.03);
     const quiet = updates[1];
     assert.ok(quiet.length >= 4);
-    assert.ok(quiet.every((entry) => text(entry) === "No tool starts yet"));
+    assert.ok(quiet.every((entry) => /^No tool starts yet(?:\n\nLatest commentary: quiet complete)?$/.test(text(entry))),
+      "quiet runs may render their terminal commentary during cleanup but never tool activity");
     for (const [index, entries] of updates.entries()) {
       assert.ok(entries[0].at < 100, `call ${index} must publish its initial state immediately`);
       // No event-driven renders between ticks, including terminal message events.

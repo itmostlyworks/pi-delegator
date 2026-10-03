@@ -2,6 +2,12 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- macOS launch and same-session cleanup now use POSIX session IDs via Python 3 instead of the potentially masked `ps sess` field. Requires `python3` on PATH; queries and cleanup remain bounded. Linux keeps its existing session lookup.
+
 ## [0.6.5] - 2026-10-03
 
 ### Changed
@@ -52,7 +58,7 @@ All notable changes to `pi-delegator` are documented here.
 - Each Bash operation uses a non-detached privileged supervisor with monitor mode enabled to launch a normal Bash job (`+m`) in its own PGID within the session, identified by a private fd 3 handshake bounded to 1 second. Command timeout cleans up only that job group and returns a recoverable Pi tool error; earlier background groups remain until whole-session cleanup. Parent abort remains terminal. Post-exit drainage remains bounded to 100 ms.
 - Unverified command containment/cleanup exits with reserved code 86 (`cleanup_failed`); abort exits 87 (`cancelled`). There is no delegate `tool_timeout` failure code. Command-local cleanup does not cover deliberate regrouping within a command, and session escape remains excluded.
 
-Native macOS session-key behavior and live-provider smoke tests remain unverified.
+At release time, native macOS session-key behavior and live-provider smoke tests had not been verified. Current results are in [the verification report](docs/RELEASE_CHECK.md).
 
 ## [0.5.6] - 2026-09-09
 

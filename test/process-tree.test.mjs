@@ -9,7 +9,18 @@ import { captureProcessSession, createProcessSessionController, createProcessTre
 const ps = () => {
   const result = spawnSync('ps', ['-axo', 'pid=,pgid=,sess=,stat='], { encoding: 'utf8', timeout: 250, maxBuffer: 1024 * 1024 });
   assert.equal(result.status, 0, result.stderr);
-  return result.stdout.trim().split('\n').map((line) => {
+  let output = result.stdout;
+  if (process.platform === 'darwin') {
+    const resolved = spawnSync('python3', ['-I', '-S', '-c', `import os, sys
+for line in sys.stdin:
+    pid, pgid, _, stat = line.split()
+    try: print(pid, pgid, os.getsid(int(pid)), stat)
+    except ProcessLookupError: pass
+`], { input: output, encoding: 'utf8', timeout: 1000 });
+    assert.equal(resolved.status, 0, resolved.stderr);
+    output = resolved.stdout;
+  }
+  return output.trim().split('\n').map((line) => {
     const [pid, pgid, sess, stat] = line.trim().split(/\s+/);
     return { pid: Number(pid), pgid: Number(pgid), sess, stat };
   });
@@ -36,10 +47,15 @@ const fakePs = (t, output) => {
   const setOutput = (text, status = 0) => {
     const quoted = `'${text.replaceAll("'", "'\\''")}'`;
     writeFileSync(join(directory, 'ps'), `#!/bin/sh\n[ "$1" = '-axo' ] && [ "$2" = 'pid=,pgid=,sess=,stat=' ] || exit 99\nprintf '%s' ${quoted}\nexit ${status}\n`, { mode: 0o700 });
+    const sessions = Object.fromEntries(text.trim().split('\n').filter(Boolean).map((line) => {
+      const [pid, pgid, sid] = line.trim().split(/\s+/);
+      return [pid, [sid, Number(pgid)]];
+    }));
+    writeFileSync(join(directory, 'python3'), `#!/bin/sh\n/bin/cat >/dev/null\nprintf '%s' '${JSON.stringify(sessions).replaceAll("'", "'\\''")}'\n`, { mode: 0o700 });
   };
   setOutput(output);
   process.env.PATH = `${directory}:${previousPath ?? ''}`;
-  return setOutput;
+  return Object.assign(setOutput, { directory });
 };
 const assertRuntime = (message) => {
   for (const marker of [
@@ -56,17 +72,22 @@ const captureError = (pid) => {
 
 if (process.platform !== 'win32') {
   const gatePid = 987654321;
-  const parentRow = `${process.pid} ${process.pid} parent-session S`;
-  const gateRow = `${gatePid} ${gatePid} gate-session Ss`;
+  const parentRow = `${process.pid} ${process.pid} 123456789 S`;
+  const gateRow = `${gatePid} ${gatePid} ${gatePid} Ss`;
   for (const [check, gate, parent] of [
-    ['gate_not_group_leader', `${gatePid} ${gatePid - 1} gate-session Ss`, parentRow],
+    ['gate_not_group_leader', `${gatePid} ${gatePid - 1} ${gatePid} Ss`, parentRow],
     ['gate_session_unusable', `${gatePid} ${gatePid} **** Ss`, parentRow],
     ['parent_session_unusable', gateRow, `${process.pid} ${process.pid} 0 S`],
-    ['session_matches_parent', `${gatePid} ${gatePid} parent-session Ss`, parentRow],
+    ['session_matches_parent', `${gatePid} ${gatePid} 123456789 Ss`, parentRow],
   ]) {
     test(`capture diagnostics identify ${check} and both rows`, (t) => {
       fakePs(t, `${gate}\n${parent}\n`);
       const message = captureError(gatePid);
+      if (process.platform === 'darwin' && check.endsWith('_session_unusable')) {
+        assert.match(message, /Invalid macOS getsid response/);
+        assertRuntime(message);
+        return;
+      }
       assert.match(message, /^Unsafe launch gate session:/);
       assert.ok(message.includes(check), message);
       for (const [label, row] of [['gate', gate], ['parent', parent]]) {
@@ -95,6 +116,12 @@ if (process.platform !== 'win32') {
     const stat = `S${'y'.repeat(5000)}`;
     fakePs(t, `${gatePid} ${gatePid} ${sess} ${stat}\n${parentRow}\n`);
     const message = captureError(gatePid);
+    if (process.platform === 'darwin') {
+      assert.match(message, /Invalid macOS getsid response/);
+      assert.ok(message.length < 1500);
+      assertRuntime(message);
+      return;
+    }
     assert.match(message, /^Unsafe launch gate session:/);
     assert.ok(message.includes('gate_session_unusable'), message);
     const fields = /gate=\{pid=\d+,pgid=\d+,sess=([^,]*),stat=([^}]*)\}/.exec(message);
@@ -142,6 +169,52 @@ if (process.platform !== 'win32') {
     });
   }
 
+  if (process.platform === 'darwin') {
+    test('macOS captures getsid IDs even when ps masks every session', (t) => {
+      const { directory } = fakePs(t, `${gatePid} ${gatePid} 0 Ss\n${process.pid} ${process.pid} 0 S\n`);
+      const sessions = JSON.stringify({ [gatePid]: [String(gatePid), gatePid], [process.pid]: ['123456789', process.pid] });
+      writeFileSync(join(directory, 'python3'), `#!/bin/sh\n/bin/cat >/dev/null\nprintf '%s' '${sessions}'\n`, { mode: 0o700 });
+      assert.equal(captureProcessSession(gatePid), String(gatePid));
+    });
+
+    test('native macOS query refreshes a stale ps PGID and omits vanished PIDs', async (t) => {
+      const gate = spawn('/bin/sh', ['-c', 'read release'], { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
+      assert.ok(gate.pid);
+      const exited = new Promise((resolve) => gate.once('exit', resolve));
+      try {
+        const { directory } = fakePs(t, `${gate.pid} 1 0 Ss\n${process.pid} 1 0 S\n987654321 1 0 S\n`);
+        rmSync(join(directory, 'python3')); // Exercise actual os.getsid/getpgid, not canned output.
+        assert.equal(captureProcessSession(gate.pid), String(gate.pid));
+      } finally {
+        gate.kill('SIGKILL');
+        await exited;
+      }
+    });
+
+    for (const [label, body, expected] of [
+      ['unavailable interpreter', 'exit 127', /Python 3 is required/],
+      ['query permission error', 'echo "PermissionError" >&2; exit 1', /getsid query failed/],
+      ['query timeout', 'exec /bin/sleep 2', /getsid query failed/],
+      ['malformed output', "printf 'not json'", /Invalid macOS getsid response/],
+      ['missing PID', "printf '{}'", /invalid session ID/],
+      ['exited gate', `printf '%s' '{"${gatePid}":null,"${process.pid}":["123456789",${process.pid}]}'`, /gate or parent missing/],
+    ]) {
+      test(`macOS ${label} fails closed and remains bounded`, async (t) => {
+        const { directory } = fakePs(t, `${gateRow}\n${parentRow}\n`);
+        writeFileSync(join(directory, 'python3'), `#!/bin/sh\n/bin/cat >/dev/null\n${body}\n`, { mode: 0o700 });
+        const started = Date.now();
+        assert.match(captureError(gatePid), expected);
+        const kill = t.mock.method(process, 'kill', () => assert.fail('Must not signal without a trustworthy session snapshot'));
+        if (label !== 'exited gate') {
+          const result = await createProcessSessionController(String(gatePid), { termGraceMs: 0, killVerifyMs: 0 }).terminate();
+          assert.equal(result.processGroupGone, false);
+          assert.equal(kill.mock.callCount(), 0);
+        }
+        assert.ok(Date.now() - started < 4000, 'query failures must have bounded waits');
+      });
+    }
+  }
+
   test('capture rejects non-leaders, parent session and masked keys', () => {
     assert.throws(() => captureProcessSession(process.pid), /Unsafe launch gate session|Cannot capture launch gate session/);
     assert.throws(() => captureProcessSession(-1), /Invalid launch gate pid/);
@@ -171,7 +244,7 @@ if (process.platform !== 'win32') {
   for (const reparent of [false, true]) {
     test(`session cleanup kills multiple monitor-mode jobs${reparent ? ' after leader exits' : ''}`, async () => {
       // The sh gate holds the detached session open until capture completes.
-      const command = reparent ? 'sleep 30 & sleep 30 & sleep 0.5; exit 0' : 'sleep 30 & sleep 30 & wait';
+      const command = reparent ? 'sleep 30 & sleep 30 & sleep 2; exit 0' : 'sleep 30 & sleep 30 & wait';
       const gate = spawn('/bin/sh', ['-c', `read release; exec /bin/bash -c 'set -m; ${command}'`], {
         detached: true, stdio: ['pipe', 'ignore', 'ignore'],
       });

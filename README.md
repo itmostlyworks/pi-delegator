@@ -8,7 +8,7 @@ A [Pi](https://github.com/earendil-works/pi-mono) extension that adds a `delegat
 pi install npm:@mostlyworks/pi-delegator
 ```
 
-Start a new Pi session. Requires an authenticated model provider, Node.js 22.19.0+, and Linux or macOS. Windows is not supported.
+Start a new Pi session. Requires an authenticated model provider, Node.js 22.19.0+, and Linux or macOS. On macOS, Python 3 must also be available as `python3` on PATH. Windows is not supported.
 
 ## Demo
 
@@ -49,7 +49,9 @@ Add, replace, or disable profiles in `~/.pi/agent/pi-delegator.json`. Trusted pr
 
 Delegates do not inherit ambient extensions or skills. Runs are foreground-only, with no nested delegation, saved sessions, or resume. Cancelling a call stops the delegate and its owned subprocesses. Cleanup and returned output are bounded. This is not a sandbox; delegates have local system access through their allowed tools.
 
-Optional run deadlines and recovery from Bash command timeouts are implemented in Git but not yet released on npm. See the [changelog](CHANGELOG.md) and [design](docs/DESIGN.md) for details.
+Run deadlines are optional. Delegates can recover from Bash command timeouts and continue working.
+
+The verified macOS fix is in Git, not npm yet; see [verification results](docs/RELEASE_CHECK.md).
 
 ## Development
 

@@ -1,7 +1,5 @@
 # Product requirements
 
-> Optional deadlines and Bash command recovery are implemented locally, not yet released on npm. Native macOS session-key behavior and live provider calls remain unverified.
-
 ## Problem
 
 Delegating a focused task to a fresh agent is useful, but existing subagent systems often combine that primitive with workflows, durable async state, scheduling, recovery, inter-agent communication, and rich fleet UI. The larger lifecycle surface has produced recurring hangs, misleading status, incomplete cancellation, and agent-type-specific surprises.
@@ -106,6 +104,8 @@ Rules:
 
 Bundled profile models are null, so the child inherits the parent model unless the call supplies an override. User configuration may add, atomically replace, or disable complete profiles. Complete definitions own model, thinking, role prompt, and tool allowlist; callers can override only the model for one invocation. Roles do not imply mandatory time budgets.
 
+Reviewer and tester no-edit restrictions are prompt instructions, not enforced write protection: their Bash access can modify files.
+
 ## User profile configuration
 
 The bounded user document at the Pi agent directory's `pi-delegator.json` contains a `profiles` map. Each name maps to `null`, which disables it, or a complete definition containing `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, and `extensions`. `deadlineMs` is optional: omitted or `null` disables the timer; an explicit positive integer retains its safeguard, up to 2,147,483,647 ms (Node's timer maximum). Optional `displayName` is a trimmed, nonblank string bounded to 256 UTF-8 bytes. Human-facing labels use it, falling back to title-cased hyphen-separated identifiers; tool schemas and result `agent` identifiers are unchanged. Result details retain the optional name for rendering independently of the current registry. All other definition fields remain required. Definitions replace whole profiles; there is no inheritance or field merging. Prompt and capability paths resolve relative to the source document. Skills identify explicit local Markdown files or directories, and extensions identify explicit local JavaScript or TypeScript files. Capability paths are canonicalized and must be readable, supported, and unique; remote sources and pi-delegator itself are rejected before launch.
@@ -195,4 +195,4 @@ V1 intentionally excludes:
 10. Parallel delegate calls do not share mutable run state.
 11. Unit/integration tests cover the lifecycle matrix in `docs/IMPLEMENTATION.md`.
 12. Typecheck and tests pass with documented commands.
-13. An explicitly configured overall deadline terminates the delegate and its owned same-session groups and returns a run timeout; command recovery cannot extend it. Without opt-in, no overall run timer is armed. `ps sess` identity must be distinct and unmasked or launch fails early; deliberate session escape is excluded.
+13. An explicitly configured overall deadline terminates the delegate and its owned same-session groups and returns a run timeout; command recovery cannot extend it. Without opt-in, no overall run timer is armed. Session identity (`ps sess` on Linux, Python 3 `os.getsid()` on macOS) must be distinct and usable or launch fails early; deliberate session escape is excluded.

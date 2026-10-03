@@ -17,8 +17,6 @@ parent Pi
 
 There is no manager process, worker-script DSL, run registry, or persistence layer. Recovery here means the same running delegate may retry or adapt after a failed/timed-out subcommand; it is not package-orchestrated whole-run retry.
 
-**Implementation status:** Optional deadlines and command recovery are implemented locally but not yet released on npm. Native macOS `ps sess` behavior and live provider execution remain unverified.
-
 ## Suggested modules
 
 ### `src/index.ts`
@@ -92,8 +90,8 @@ interface DelegateProfile {
 
 ### `src/process-tree.ts`
 
-- Captures an opaque, distinct, unmasked `ps sess` key from the live detached launch gate before it execs Pi. Privileged gate authorization is private; fail early if session identification is unusable.
-- Scans and signals every live group in that session on normal completion, parent cancellation, and opted-in deadline, including reparented Bash jobs. Bounds `ps` output/calls and TERM → KILL windows; failed verification is reported honestly.
+- Captures a distinct session key from the live detached launch gate before it execs Pi: `ps sess` on Linux, Python 3 `os.getsid()` on macOS (where `ps sess` can be a masked kernel pointer). Privileged gate authorization is private; fail early if session identification is unusable.
+- Scans and signals every live group in that session on normal completion, parent cancellation, and opted-in deadline, including reparented Bash jobs. Bounds process-query output/calls and TERM → KILL windows; failed verification is reported honestly. macOS refreshes PGIDs with `os.getpgid()` between two matching SID reads, retrying at most three times; only ESRCH permits omitting a process. Each `ps`/Python query has a 500 ms timeout and 1 MiB output cap (Linux `ps`: 250 ms). Python runs with `-I -S`; no packages are required.
 - No Windows fallback that silently downgrades to direct-child termination.
 
 Modules may be combined if the resulting code is easier to audit.
@@ -286,7 +284,7 @@ V1 officially supports macOS and Linux. On `win32`, fail before spawning with a 
 
 ## Containment limits
 
-Ordinary Bash jobs have distinct groups in the owned session, so whole-session cleanup includes them. Command-local cleanup does not cover deliberate regrouping within a command. Deliberate `setsid`/session escape, including by trusted custom extensions, is not contained. Native macOS session-key functionality remains unverified; fail early if `ps` returns unusable or masked session keys. Abrupt parent death is not Pi tool cancellation and does not guarantee immediate cleanup; no parent-death supervisor is provided.
+Ordinary Bash jobs have distinct groups in the owned session, so whole-session cleanup includes them. Command-local cleanup does not cover deliberate regrouping within a command. Deliberate `setsid`/session escape, including by trusted custom extensions, is not contained. Fail early if session identification is unavailable or unusable. Abrupt parent death is not Pi tool cancellation and does not guarantee immediate cleanup; no parent-death supervisor is provided.
 
 ## Security
 
@@ -295,5 +293,5 @@ Ordinary Bash jobs have distinct groups in the owned session, so whole-session c
 - No shell interpolation in launch construction.
 - No delegator-owned run artifacts are written to the repository. Tester commands may create bounded generated artifacts or local test state as part of exercising behavior, but must clean them up.
 - Explicit tool allowlists per role.
-- Worker is the only source-mutating role. Tester may create bounded temporary/generated artifacts and local test state through runtime commands, but its prompt forbids source and configuration edits and requires cleanup.
+- Worker is the only role instructed to edit source. Reviewer and tester no-edit restrictions are prompt instructions, not enforced write protection, because Bash can write files. Tester may create bounded temporary/generated artifacts and local test state, with cleanup required.
 - Output and diagnostics are bounded before entering parent model context.

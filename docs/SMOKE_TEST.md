@@ -1,245 +1,95 @@
-# Manual release smoke test
+# Practical smoke test
 
-Run these checks from a clean `pi-delegator` checkout on macOS or Linux with an authenticated Pi installation. They make live provider calls and are intentionally not part of `npm test`. Optional deadlines and recovery are implemented locally but not yet released; provider smoke checks and native macOS session-key behavior are not yet verified.
+Use an authenticated Pi installation and disposable fixtures. Record outcomes in [RELEASE_CHECK.md](RELEASE_CHECK.md); these live checks are separate from the provider-free test suite.
 
-## 1. Prepare and record the environment
+## 1. Prepare
+
+From the checkout:
 
 ```bash
-npm install
 npm run typecheck
 npm test
 npm pack --dry-run
 
-export PI_DELEGATOR_ROOT="$PWD"
-export PI_DELEGATOR_SMOKE_ROOT="$(mktemp -d)"
-pi install "$PI_DELEGATOR_ROOT"
-
+export ROOT="$PWD"
+export SMOKE="$(mktemp -d /tmp/pi-delegator-smoke.XXXXXX)"
+export MARKER="PI_DELEGATOR_$(basename "$SMOKE")"
+printf 'Fixture: %s\nMarker: %s\n' "$SMOKE" "$MARKER"
 pi --version
 node --version
-git rev-parse HEAD
 ```
 
-Start a new Pi process after installation. Record the exact model/provider used, the commands run, elapsed behavior, and result in the report template below. Never use a valuable working tree for worker checks.
+Check the effective scout/worker profiles in the Pi agent directory (`PI_CODING_AGENT_DIR`, or `~/.pi/agent`) and any trusted project override. Record models and configured deadlines; don't assume bundled defaults. On macOS, `python3` must be on PATH.
 
-## 2. Scout two known files
-
-From the package checkout, start Pi:
+Start a fresh Pi with the checkout explicitly loaded, without installing or removing packages:
 
 ```bash
-cd "$PI_DELEGATOR_ROOT"
-pi
+cd "$SMOKE"
+pi --no-session --no-extensions --no-skills --extension "$ROOT/src/index.ts"
 ```
 
-Send this prompt:
+Keep an observation terminal open. In prompts below, replace `<ROOT>` and `<MARKER>` with the printed values. Worker commands run in the disposable directory.
+
+## 2. Scout
 
 ```text
-Call delegate exactly once with agent scout. Ask it to confirm the purpose of src/index.ts and src/runner.ts, citing both paths. Do not inspect the files yourself.
+Call delegate exactly once with agent scout and cwd <ROOT>. Ask it to confirm the purpose of src/index.ts and src/runner.ts, citing both paths. Do not inspect the files yourself.
 ```
 
-Pass conditions:
+Pass: one delegate completes and accurately describes both files.
 
-- one scout call starts and returns; there is no default run deadline;
-- the response identifies both files accurately;
-- progress is compact rather than a full child transcript.
-
-## 3. Reviewer does not modify a small diff
-
-Create a disposable repository with one uncommitted diff:
-
-```bash
-mkdir -p "$PI_DELEGATOR_SMOKE_ROOT/reviewer"
-cd "$PI_DELEGATOR_SMOKE_ROOT/reviewer"
-git init -q
-printf 'export function add(a: number, b: number) { return a + b; }\n' > math.ts
-git add math.ts
-git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base
-printf 'export function add(a: number, b: number) { return a - b; }\n' > math.ts
-before_diff="$(git diff --binary | git hash-object --stdin)"
-before_status="$(git status --porcelain=v1 -z | git hash-object --stdin)"
-pi
-```
-
-Send this prompt:
+## 3. Timeout recovery in the same delegate
 
 ```text
-Call delegate exactly once with agent reviewer. Ask it to review the current uncommitted diff for correctness and report findings without modifying files. Do not review the diff yourself.
+Call delegate exactly once with agent worker. First run this Bash command with the tool timeout set to 2 seconds:
+node -e 'require("fs").writeFileSync("timeout.pid",String(process.pid));setInterval(()=>{},1000);setTimeout(()=>process.exit(0),180000)' <MARKER>_timeout
+Expect a timeout error. In the SAME delegate, then run: printf 'RECOVERED_AFTER_TIMEOUT\n'
+Finish by reporting both outcomes. Do not use a second delegate.
 ```
 
-After Pi returns, exit it and verify the working tree is byte-for-byte unchanged:
+Pass: the timeout is reported, the next command succeeds, the delegate finishes, and the recorded process is gone.
 
-```bash
-after_diff="$(git diff --binary | git hash-object --stdin)"
-after_status="$(git status --porcelain=v1 -z | git hash-object --stdin)"
-test "$before_diff" = "$after_diff"
-test "$before_status" = "$after_status"
-```
-
-Pass conditions: the reviewer reports the subtraction bug and both `test` commands exit 0.
-
-## 4. Tester exercises real behavior without editing source
-
-```bash
-mkdir -p "$PI_DELEGATOR_SMOKE_ROOT/tester"
-cd "$PI_DELEGATOR_SMOKE_ROOT/tester"
-git init -q
-printf '{"scripts":{"test":"node --test"},"type":"module"}\n' > package.json
-printf 'export const double = (value) => value * 2;\n' > double.js
-printf 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { double } from "./double.js";\ntest("double", () => assert.equal(double(3), 6));\n' > double.test.js
-git add package.json double.js double.test.js
-git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base
-before_head="$(git rev-parse HEAD)"
-before_status="$(git status --porcelain=v1 -z | git hash-object --stdin)"
-pi
-```
-
-Send this prompt:
+## 4. Background cleanup on normal completion
 
 ```text
-Call delegate exactly once with agent tester. Ask it to verify the double(value) feature by running the existing test suite and directly exercising representative positive, zero, and negative inputs. Require concrete evidence and do not modify source or configuration files. Do not test the feature yourself.
+Call delegate exactly once with agent worker. Run this Bash command without a tool timeout:
+node -e 'require("fs").writeFileSync("background.pid",String(process.pid));setInterval(()=>{},1000);setTimeout(()=>process.exit(0),180000)' <MARKER>_background > /dev/null 2>&1 & sleep 15
+Then finish. Do not kill the background job yourself; the parent runner should clean it up.
 ```
 
-After Pi returns, exit it and verify:
+While the job is active, record its identity as described below. Pass: the job has a distinct PGID but shares the delegate's SID, and both disappear when the delegate finishes.
 
-```bash
-after_head="$(git rev-parse HEAD)"
-after_status="$(git status --porcelain=v1 -z | git hash-object --stdin)"
-test "$before_head" = "$after_head"
-test "$before_status" = "$after_status"
-```
-
-Pass conditions: the tester reports a pass verdict with evidence from both the existing suite and direct behavior checks, performs no source or configuration edits, and both final `test` commands exit 0.
-
-## 5. Worker edits a disposable repository
-
-```bash
-mkdir -p "$PI_DELEGATOR_SMOKE_ROOT/worker"
-cd "$PI_DELEGATOR_SMOKE_ROOT/worker"
-git init -q
-printf '{"scripts":{"test":"node --test"},"type":"module"}\n' > package.json
-printf 'export const double = (value) => value * 2;\n' > double.js
-printf 'import test from "node:test";\nimport assert from "node:assert/strict";\nimport { double } from "./double.js";\ntest("double", () => assert.equal(double(3), 6));\n' > double.test.js
-git add package.json double.js double.test.js
-git -c user.name=Smoke -c user.email=smoke@example.invalid commit -qm base
-pi
-```
-
-Send this prompt:
+## 5. Interactive Escape cancellation
 
 ```text
-Call delegate exactly once with agent worker. Ask it to add a triple(value) export to double.js, add one focused test, run npm test, and report changed files and validation. Do not make the change yourself.
+Call delegate exactly once with agent worker. Run this Bash command without a tool timeout and wait for completion:
+node -e 'require("fs").writeFileSync("cancel.pid",String(process.pid));setInterval(()=>{},1000);setTimeout(()=>process.exit(0),180000)' <MARKER>_cancel
 ```
 
-After Pi returns, exit it and verify:
+Observe the live PID first, then press **Escape** in Pi. Pass: the tool settles as `cancelled`, and the delegate and marked descendant disappear. The fixture's three-minute safety exit is only a backstop, not a cancellation pass. Killing the parent with SIGINT or an outer timeout is not this test.
+
+## Observe and clean up
+
+In the observation terminal, set `SMOKE` to the printed fixture directory. Choose `timeout.pid`, `background.pid`, or `cancel.pid`:
 
 ```bash
-npm test
-git status --short
-git diff --exit-code -- package.json
+export SMOKE=/tmp/pi-delegator-smoke.REPLACE_ME
+pid="$(<"$SMOKE/cancel.pid")"
+ps -p "$pid" -o pid=,ppid=,pgid=,sess=,command=
+# macOS ps masks sess; use the POSIX API for the actual session ID.
+python3 -I -S -c 'import os,sys; p=int(sys.argv[1]); print("PID",p,"PGID",os.getpgid(p),"SID",os.getsid(p))' "$pid"
 ```
 
-Pass conditions: only the requested fixture files change, the new test exists, and both the worker's validation and the explicit `npm test` pass.
-
-## 6. Two sibling scouts
-
-From the package checkout:
+Record the SID as `delegate_pid` and inspect it with `ps` too. After completion or cancellation, this should return no rows (exit 1):
 
 ```bash
-cd "$PI_DELEGATOR_ROOT"
-pi
+ps -p "$pid,$delegate_pid" -o pid=,pgid=,sess=,stat=,command=
 ```
 
-Send this prompt:
-
-```text
-In one assistant turn, issue two independent delegate tool calls so Pi can run them as siblings. Use scout for both. Ask one to summarize src/protocol.ts and the other to summarize src/process-tree.ts. Do not inspect those files yourself and do not run the calls sequentially.
-```
-
-Pass conditions:
-
-- both tool calls are visibly active at the same time;
-- each result describes only its requested file;
-- neither result or lifecycle outcome overwrites the other.
-
-## 7. Cancel an active process tree
-
-Generate a unique marker, start Pi interactively, and keep the shell open for the post-cancel check:
+Bound observation to 90 seconds for startup and 5 seconds after cancellation. If a check stalls, cancel with Escape and record what happened. If a fixture survives, record failure and clean up only its recorded PID after confirming the command still contains your unique marker; never kill by a broad process-name match. Exit the test Pi session before removing the disposable directory:
 
 ```bash
-export PI_DELEGATOR_CANCEL_MARKER="PI_DELEGATOR_CANCEL_$(date +%s)_$$"
-cd "$PI_DELEGATOR_SMOKE_ROOT/worker"
-pi
+rm -rf -- "$SMOKE"
 ```
 
-Send the prompt below after replacing `<MARKER>` with the value printed by `printf '%s\n' "$PI_DELEGATOR_CANCEL_MARKER"`:
-
-```text
-Call delegate exactly once with agent worker. Ask it to run this exact validation command and wait for it to finish before answering: node -e 'setInterval(() => {}, 1000)' <MARKER>
-```
-
-Wait until the worker starts the command, then press Escape (Pi's default `app.interrupt` binding) to cancel the active tool call. Exit Pi if needed and check:
-
-```bash
-sleep 3
-if ps -axo command= | grep -F "$PI_DELEGATOR_CANCEL_MARKER" | grep -v grep; then
-  echo "FAIL: marked descendant still exists" >&2
-  exit 1
-fi
-```
-
-Pass conditions: cancellation settles after bounded cleanup and the marked descendant is absent.
-
-## 8. Descendant-held-pipe cleanup fixture
-
-This check uses a real parent Pi process and the repository's fixture as the delegated child. It makes no child provider call. The fixture exits after starting a descendant that inherits stdout, reproducing the pipe-drain failure mode.
-
-```bash
-export PI_DELEGATOR_PI_BINARY="$PI_DELEGATOR_ROOT/test/fixtures/fake-pi.mjs"
-export FAKE_PI_SCENARIO="descendant-holds-stdout"
-export FAKE_PI_DESCENDANT_PID_PATH="$PI_DELEGATOR_SMOKE_ROOT/descendant.pid"
-cd "$PI_DELEGATOR_ROOT"
-pi
-```
-
-Send this prompt:
-
-```text
-Call delegate exactly once with agent scout and task "exercise the descendant-held-pipe fixture". Report the delegate tool error verbatim.
-```
-
-The call should settle with a bounded `missing_terminal_answer` failure rather than hang. Exit Pi, then verify the descendant is gone:
-
-```bash
-pid="$(cat "$FAKE_PI_DESCENDANT_PID_PATH")"
-if kill -0 "$pid" 2>/dev/null; then
-  echo "FAIL: fixture descendant $pid still exists" >&2
-  exit 1
-fi
-unset PI_DELEGATOR_PI_BINARY FAKE_PI_SCENARIO FAKE_PI_DESCENDANT_PID_PATH
-```
-
-## 9. macOS same-session groups (manual, macOS only)
-
-On a native macOS host, use a disposable directory and a fresh Pi session with the local checkout installed. Use a unique marker and ask a worker delegate to start a Bash command that creates a normal background job (for example, a marked `node -e 'setInterval(() => {}, 1000)'` process) and returns while that job remains alive; do **not** use `setsid`, `disown` with session escape, or a custom extension. Observe the background job PID/PGID and `ps -axo pid=,pgid=,sess=,command=` while the delegate is still active: the job should have a different PGID from the delegate but share its `sess` key. Then let the delegate finish, and confirm the marked job is gone after bounded whole-session cleanup. Repeat with a separate marked background job and cancel the active delegate; verify that job is also gone. If `ps` masks or cannot provide a distinct usable session key, the delegate should fail early rather than claim cleanup. Record exact prompts, commands, process observations, elapsed cleanup, and outcomes; do not mark this check passed without running it on macOS. This verifies same-session group cleanup, not deliberate session escape or command-local regrouping.
-
-## 10. Record the release result
-
-Copy this table into the release notes or implementation report and fill every row. Do not mark a release smoke-tested without recording actual outcomes.
-
-| Check | Exact command/session | Observed outcome | Pass? |
-| --- | --- | --- | --- |
-| Environment and automated checks |  |  |  |
-| Scout known files |  |  |  |
-| Reviewer no-write |  |  |  |
-| Tester real-behavior verification |  |  |  |
-| Worker edit and validation |  |  |  |
-| Parallel sibling scouts |  |  |  |
-| Parent cancellation/process tree |  |  |  |
-| Descendant-held stdout |  |  |  |
-| macOS same-session groups (macOS only) |  |  |  |
-
-Clean up when finished:
-
-```bash
-rm -rf "$PI_DELEGATOR_SMOKE_ROOT"
-pi remove "$PI_DELEGATOR_ROOT"
-```
+For profile or UI changes, also exercise the affected role in a disposable repository: reviewer/tester should follow their no-edit instructions, worker should make only the requested edit, and two sibling scouts should return independently. The standard release check need not repeat every role scenario.

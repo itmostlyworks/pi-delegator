@@ -4,11 +4,11 @@
 
 Implement one small vertical path first, then harden it. Do not build all profile or rendering conveniences before lifecycle tests pass.
 
-**Implementation status:** Optional deadlines, Bash timeout recovery, and same-session cleanup are implemented locally, not yet released on npm. The stages below record delivery and verification criteria, not a pending redesign. Native macOS session-key behavior and live-provider calls remain unverified. Bundled profiles use `timeoutMs: null`; configuration omits `deadlineMs` or sets it to `null` for no run timer, preserving explicit positive values through 2,147,483,647 ms. There is no caller deadline input.
+The stages below record the delivered implementation and its acceptance criteria. For current results, see [RELEASE_CHECK.md](RELEASE_CHECK.md).
 
 ## Lifecycle implementation
 
-- The detached `/bin/sh` gate waits for private authorization while the runner captures its distinct, unmasked opaque `ps sess` key; it then execs Pi. Unusable or masked keys fail early.
+- The detached `/bin/sh` gate waits for private authorization while the runner captures its distinct session key (`ps sess` on Linux, Python 3 `os.getsid()` on macOS); it then execs Pi. Unavailable or unusable identity fails early.
 - Each Bash operation uses a non-detached privileged supervisor with monitor mode enabled to launch a normal Bash job (`+m`) with a separate PGID in the same session; a private fd 3 PGID handshake is bounded to 1 second.
 - A timed-out job receives bounded TERM → KILL and verification for its PGID only, preserving earlier background job groups. A recoverable Pi tool error allows continuation. Failed containment uses reserved exit 86 (`cleanup_failed`); parent abort uses 87 (`cancelled`) and remains terminal. There is no delegate `tool_timeout` code.
 - Normal completion, cancellation, and optional overall deadline scan and signal all live groups in the captured session with bounded `ps` output/calls and fixed TERM/KILL waits. Post-exit Bash drainage remains at most 100 ms. Session escape is excluded; command-local cleanup does not cover deliberate regrouping inside a command.
@@ -67,7 +67,7 @@ Acceptance:
 
 - Each profile launches with the expected default CLI contract.
 - Valid model overrides affect only the selected call; thinking cannot be supplied by the caller.
-- Reviewer/oracle cannot mutate through built-in tools.
+- Reviewer is instructed not to modify files; its Bash access is not write protection. Oracle has no built-in write tools.
 - Tester receives bash for bounded behavioral verification but no edit/write tools.
 - Worker receives mutation tools.
 - Parallel calls keep outputs and lifecycle state isolated.
@@ -217,7 +217,7 @@ Add formatting or linting only if configured intentionally; do not spend the fir
 
 ## Definition of done
 
-- Verify the acceptance criteria in `docs/REQUIREMENTS.md`; the local implementation is not an npm release.
+- Verify the acceptance criteria in `docs/REQUIREMENTS.md` and record results separately from npm publication.
 - Lifecycle matrix is automated except explicitly marked manual real-Pi and native macOS checks.
 - Cleanup/drain waits, stream buffers, and returned output are bounded; active work without an opted-in run deadline is permitted.
 - No V1 non-goal has entered the public API.

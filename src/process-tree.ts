@@ -4,7 +4,7 @@ import { release } from "node:os";
 const DEFAULT_TERM_GRACE_MS = 2_000;
 const DEFAULT_KILL_VERIFY_MS = 1_000;
 const VERIFY_INTERVAL_MS = 25;
-const PS_TIMEOUT_MS = 250;
+const PS_TIMEOUT_MS = process.platform === "darwin" ? 500 : 250;
 
 export interface ProcessTreeTermination {
   readonly termSent: boolean;
@@ -46,7 +46,59 @@ function usableSessionKey(key: string): boolean {
     !/^(?:0+|0x0+|unknown|none|n\/a)$/i.test(key);
 }
 
-function snapshot(): Snapshot {
+// macOS ps "sess" is a kernel pointer and may be masked to zero. Query the
+// POSIX ID instead; ESRCH is the only safe reason to omit a sampled process.
+const MAC_SESSION_SCRIPT = `import json, os, sys
+result = {}
+for pid in json.load(sys.stdin):
+    try:
+        for attempt in range(3):
+            sid = os.getsid(pid)
+            pgid = os.getpgid(pid)
+            if sid == os.getsid(pid):
+                result[str(pid)] = [str(sid), pgid]
+                break
+        else:
+            raise RuntimeError("session changed repeatedly during query")
+    except ProcessLookupError:
+        result[str(pid)] = None
+json.dump(result, sys.stdout)
+`;
+
+function macSessionRows(rows: readonly ProcessRow[]): Snapshot {
+  const result = spawnSync("python3", ["-I", "-S", "-c", MAC_SESSION_SCRIPT], {
+    input: JSON.stringify(rows.map((row) => row.pid)),
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    timeout: PS_TIMEOUT_MS,
+  });
+  if (result.error || result.status !== 0) {
+    return { diagnostic: `macOS getsid query failed (Python 3 is required on PATH): ${
+      (result.error ? errorMessage(result.error) : result.stderr.trim() || `exit ${result.status}`).slice(0, 256)}` };
+  }
+  try {
+    const sessions: unknown = JSON.parse(result.stdout);
+    if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) throw new Error("expected session map");
+    const resolved: ProcessRow[] = [];
+    for (const row of rows) {
+      const identity: unknown = (sessions as Record<string, unknown>)[String(row.pid)];
+      if (identity === null) continue; // Exited between ps and getsid.
+      if (!Array.isArray(identity) || identity.length !== 2) throw new Error(`invalid session ID for PID ${row.pid}`);
+      const [sid, pgid]: unknown[] = identity;
+      if (typeof sid !== "string" || !/^[1-9]\d*$/.test(sid) || !Number.isSafeInteger(Number(sid)) ||
+          typeof pgid !== "number" || !Number.isSafeInteger(pgid) || pgid <= 0) {
+        throw new Error(`invalid session ID or process group for PID ${row.pid}`);
+      }
+      // Read SID and PGID together: shell job creation can change the ps PGID.
+      resolved.push({ ...row, sess: sid, pgid });
+    }
+    return resolved;
+  } catch (error) {
+    return { diagnostic: `Invalid macOS getsid response: ${errorMessage(error).slice(0, 256)}` };
+  }
+}
+
+function snapshot(includeSessions = true): Snapshot {
   const result = spawnSync("ps", ["-axo", "pid=,pgid=,sess=,stat="], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
@@ -67,7 +119,7 @@ function snapshot(): Snapshot {
     }
     rows.push({ pid: Number(match[1]), pgid: Number(match[2]), sess: match[3]!, stat: match[4]! });
   }
-  return rows;
+  return includeSessions && process.platform === "darwin" ? macSessionRows(rows) : rows;
 }
 
 // Keep failure evidence bounded and single-line; never include command lines or environment.
@@ -78,7 +130,8 @@ function captureContext(pid: number, target?: ProcessRow, parent?: ProcessRow): 
     : "missing";
   return `gatePid=${pid}; parentPid=${process.pid}; gate=${row(target)}; parent=${row(parent)}; ` +
     `platform=${process.platform}; release=${field(release())}; arch=${process.arch}; ` +
-    `node=${process.version}; uv=${process.versions.uv ?? "unknown"}; ps="ps -axo pid=,pgid=,sess=,stat="`;
+    `node=${process.version}; uv=${process.versions.uv ?? "unknown"}; ps="ps -axo pid=,pgid=,sess=,stat="; ` +
+    `sessionSource=${process.platform === "darwin" ? "python3 os.getsid" : "ps sess"}`;
 }
 
 /** Capture the POSIX session while the detached launch gate is still alive. */
@@ -103,7 +156,7 @@ export function captureProcessSession(pid: number): string {
 }
 
 function activeProcessGroupMembers(processGroupId: number): GroupMembers {
-  const rows = snapshot();
+  const rows = snapshot(false);
   if ("diagnostic" in rows) return rows;
   return rows.filter((row) => row.pgid === processGroupId && !row.stat.startsWith("Z"))
     .map((row) => row.pid);

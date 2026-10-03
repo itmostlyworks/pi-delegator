@@ -23,6 +23,8 @@ import {
 import { isSupportedPlatform, runDelegate } from "../src/runner.ts";
 
 const execFileAsync = promisify(execFile);
+// Native macOS session sampling adds a bounded Python startup before child exec.
+const launchAllowanceMs = process.platform === "darwin" ? 1_000 : 0;
 const fixture = resolve("test/fixtures/fake-pi.mjs");
 const realPiBashFixture = resolve("test/fixtures/real-pi-bash-child.mjs");
 const bashDrainFixture = resolve("test/fixtures/bash-operation-drain-child.mjs");
@@ -962,7 +964,7 @@ test("a terminal answer observed before the deadline wins during semantic draina
   await withTempDir(async (cwd) => {
     const signalPath = join(cwd, "signals.txt");
     const result = await runDelegate({
-      profile: { ...SCOUT_PROFILE, timeoutMs: 350 },
+      profile: { ...SCOUT_PROFILE, timeoutMs: 350 + launchAllowanceMs },
       task: "Late answer then leak",
       cwd,
       env: fixtureEnv("delayed-leaked-watcher", {
@@ -971,13 +973,13 @@ test("a terminal answer observed before the deadline wins during semantic draina
       }),
       cleanupGraceMs: 100,
       cleanupVerifyMs: 100,
-      semanticDrainMs: 200,
+      semanticDrainMs: 200 + launchAllowanceMs,
       exitDrainMs: 20,
     });
 
     assert.equal(result.ok, true);
     assert.equal(result.text, "late valid result");
-    assert.ok(result.durationMs >= 350, "cleanup should cross the original deadline in this fixture");
+    assert.ok(result.durationMs >= 350 + launchAllowanceMs, "cleanup should cross the original deadline in this fixture");
     assert.match(await waitForFile(signalPath), /SIGTERM/);
     assert.equal(result.cleanup.forced, true);
     assert.equal(result.cleanup.pipesClosed, true);
@@ -989,7 +991,7 @@ test("TERM-resistant child is escalated to KILL", async () => {
     const signalPath = join(cwd, "signals.txt");
     const started = Date.now();
     const result = await runDelegate({
-      profile: { ...SCOUT_PROFILE, timeoutMs: 150 },
+      profile: { ...SCOUT_PROFILE, timeoutMs: 150 + launchAllowanceMs },
       task: "Resist TERM",
       cwd,
       env: fixtureEnv("term-resistant", { FAKE_PI_SIGNAL_PATH: signalPath }),
@@ -1000,7 +1002,7 @@ test("TERM-resistant child is escalated to KILL", async () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.code, "run_timeout");
-    assert.ok(Date.now() - started < 750, "TERM-to-KILL escalation must remain bounded");
+    assert.ok(Date.now() - started < 750 + 2 * launchAllowanceMs, "TERM-to-KILL escalation must remain bounded");
     assert.equal((await waitForFile(signalPath)).trim(), "SIGTERM");
     assert.equal(result.cleanup.termSent, true);
     assert.equal(result.cleanup.killSent, true);
@@ -1013,7 +1015,7 @@ test("TERM-resistant descendant is killed with the full process group", async ()
     const signalPath = join(cwd, "signals.txt");
     const descendantPidPath = join(cwd, "descendant.pid");
     const result = await runDelegate({
-      profile: { ...SCOUT_PROFILE, timeoutMs: 180 },
+      profile: { ...SCOUT_PROFILE, timeoutMs: 180 + launchAllowanceMs },
       task: "Resistant descendant",
       cwd,
       env: fixtureEnv("term-resistant-descendant", {
@@ -1040,7 +1042,7 @@ test("abort racing the deadline starts only one cleanup sequence", async () => {
     const signalPath = join(cwd, "signals.txt");
     const controller = new AbortController();
     const run = runDelegate({
-      profile: { ...SCOUT_PROFILE, timeoutMs: 150 },
+      profile: { ...SCOUT_PROFILE, timeoutMs: 150 + launchAllowanceMs },
       task: "Race abort and timeout",
       cwd,
       signal: controller.signal,
@@ -1049,7 +1051,7 @@ test("abort racing the deadline starts only one cleanup sequence", async () => {
       cleanupVerifyMs: 150,
       exitDrainMs: 20,
     });
-    setTimeout(() => controller.abort(), 150);
+    setTimeout(() => controller.abort(), 150 + launchAllowanceMs);
 
     const result = await run;
     assert.equal(result.ok, false);
