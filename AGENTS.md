@@ -15,7 +15,7 @@ The scope exclusions are part of the product contract. Do not add features merel
 
 `pi-delegator` is a focused subprocess runner exposed as one Pi tool. Keep it understandable enough that one engineer can audit the complete launch, cancellation, parsing, recovery, and cleanup path in one sitting.
 
-Bound cleanup waits and output, not useful work by default. Subcommand failures and timeouts should be recoverable after safe cleanup. Overall run deadlines are optional user-controlled safeguards, not mandatory profile budgets. Optional deadlines and command recovery are implemented locally but not yet released on npm; native macOS session-key behavior and live-provider execution remain unverified.
+Bound cleanup waits and output, not useful work by default. Subcommand failures and timeouts should be recoverable after safe cleanup. Overall run deadlines are optional user-controlled safeguards, not mandatory profile budgets. Optional deadlines and command recovery shipped in 0.6.0 and are included in the published 0.6.5 npm package. The 0.6.x lifecycle changes remain unverified with live providers and native macOS session-key handling; earlier authenticated smoke results are historical.
 
 Optimize in this order:
 

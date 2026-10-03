@@ -4,7 +4,7 @@
 
 Implement one small vertical path first, then harden it. Do not build all profile or rendering conveniences before lifecycle tests pass.
 
-**Implementation status:** Optional deadlines, Bash timeout recovery, and same-session cleanup are implemented locally, not yet released on npm. The stages below record delivery and verification criteria, not a pending redesign. Native macOS session-key behavior and live-provider calls remain unverified. Bundled profiles use `timeoutMs: null`; configuration omits `deadlineMs` or sets it to `null` for no run timer, preserving explicit positive values through 2,147,483,647 ms. There is no caller deadline input.
+**Implementation status:** Optional deadlines, Bash timeout recovery, and same-session cleanup shipped in 0.6.0 and are included in the published 0.6.5 npm package. The stages below record delivery and verification criteria, not a pending redesign. The 0.6.x lifecycle changes remain unverified with live providers and native macOS session-key handling. Earlier authenticated smoke results are historical; see [release verification](RELEASE_CHECK.md). Bundled profiles use `timeoutMs: null`; configuration omits `deadlineMs` or sets it to `null` for no run timer, preserving explicit positive values through 2,147,483,647 ms. There is no caller deadline input.
 
 ## Lifecycle implementation
 
@@ -67,7 +67,7 @@ Acceptance:
 
 - Each profile launches with the expected default CLI contract.
 - Valid model overrides affect only the selected call; thinking cannot be supplied by the caller.
-- Reviewer/oracle cannot mutate through built-in tools.
+- Bundled oracle has no mutation tools. Bundled reviewer has no edit/write tools, but its Bash access can mutate files; its no-edit restriction is a prompt instruction, not enforced write protection.
 - Tester receives bash for bounded behavioral verification but no edit/write tools.
 - Worker receives mutation tools.
 - Parallel calls keep outputs and lifecycle state isolated.
@@ -217,7 +217,7 @@ Add formatting or linting only if configured intentionally; do not spend the fir
 
 ## Definition of done
 
-- Verify the acceptance criteria in `docs/REQUIREMENTS.md`; the local implementation is not an npm release.
+- Verify the acceptance criteria in `docs/REQUIREMENTS.md`; npm publication alone does not establish lifecycle verification.
 - Lifecycle matrix is automated except explicitly marked manual real-Pi and native macOS checks.
 - Cleanup/drain waits, stream buffers, and returned output are bounded; active work without an opted-in run deadline is permitted.
 - No V1 non-goal has entered the public API.

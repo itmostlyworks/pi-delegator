@@ -1,6 +1,6 @@
 # Product requirements
 
-> Optional deadlines and Bash command recovery are implemented locally, not yet released on npm. Native macOS session-key behavior and live provider calls remain unverified.
+> Optional deadlines and Bash command recovery shipped in 0.6.0 and are included in the published 0.6.5 npm package. The 0.6.x lifecycle changes remain unverified with live providers and native macOS session-key handling. Earlier authenticated smoke results are historical; see [release verification](RELEASE_CHECK.md).
 
 ## Problem
 

@@ -17,7 +17,7 @@ parent Pi
 
 There is no manager process, worker-script DSL, run registry, or persistence layer. Recovery here means the same running delegate may retry or adapt after a failed/timed-out subcommand; it is not package-orchestrated whole-run retry.
 
-**Implementation status:** Optional deadlines and command recovery are implemented locally but not yet released on npm. Native macOS `ps sess` behavior and live provider execution remain unverified.
+**Implementation status:** Optional deadlines and command recovery shipped in 0.6.0 and are included in the published 0.6.5 npm package. The 0.6.x lifecycle changes remain unverified with live providers and native macOS `ps sess` handling. Earlier authenticated smoke results are historical; see [release verification](RELEASE_CHECK.md).
 
 ## Suggested modules
 
@@ -295,5 +295,5 @@ Ordinary Bash jobs have distinct groups in the owned session, so whole-session c
 - No shell interpolation in launch construction.
 - No delegator-owned run artifacts are written to the repository. Tester commands may create bounded generated artifacts or local test state as part of exercising behavior, but must clean them up.
 - Explicit tool allowlists per role.
-- Worker is the only source-mutating role. Tester may create bounded temporary/generated artifacts and local test state through runtime commands, but its prompt forbids source and configuration edits and requires cleanup.
+- Among bundled profiles, only worker's prompt permits source edits. Reviewer and tester have Bash access, so their no-edit prompt restrictions are not enforced write protection. Tester's prompt permits bounded temporary/generated artifacts and local test state and requires cleanup. Configured profiles may replace tool access and prompts; this is not a sandbox.
 - Output and diagnostics are bounded before entering parent model context.
