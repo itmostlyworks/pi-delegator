@@ -57,4 +57,12 @@ npm test
 
 Tests use a fake Pi executable, with no provider calls.
 
+## Releasing
+
+Update `CHANGELOG.md`, bump the package and lockfile versions, and commit. Create an annotated `v<version>` tag matching `package.json`, then push the commit and tag. The [release workflow](.github/workflows/release.yml) runs typecheck, tests, and a package dry-run before publishing to npm and creating a GitHub Release with generated notes.
+
+One-time npm setup: configure the package's GitHub Actions trusted publisher with owner `itmostlyworks`, repository `pi-delegator`, and workflow filename `release.yml`, allowing direct `npm publish`. No npm token secret is needed. Publishing requires this setup before pushing a new release tag.
+
+Failed workflow runs can be rerun: already-published npm versions and existing GitHub Releases are skipped. Never move a published tag or reuse its version for different contents; skipping an existing version does not verify its contents. Registry or GitHub API failures stop the workflow rather than being treated as missing releases. This workflow does not publish existing tags retroactively.
+
 [MIT](LICENSE)

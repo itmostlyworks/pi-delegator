@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@11
+
+      - run: npm ci
+
+      - name: Check tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          test "$RELEASE_TAG" = "v$VERSION"
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm pack --dry-run
+
+      - name: Publish to npm unless already published
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          # Query the existing package, not a missing version. Registry failures
+          # must fail this step rather than being mistaken for an unpublished version.
+          npm view "$NAME" versions --json > "$RUNNER_TEMP/npm-versions.json"
+          if node --input-type=module -e '
+            import fs from "node:fs";
+            const versions = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            process.exit([].concat(versions).includes(pkg.version) ? 0 : 1);
+          ' "$RUNNER_TEMP/npm-versions.json"; then
+            echo "::notice::This npm version already exists; skipping publication."
+          else
+            npm publish --access public
+          fi
+
+      - name: Create GitHub Release unless already created
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          # Listing fails on API/auth errors; unlike treating any failed view
+          # command as evidence that a release does not exist.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[].tag_name' > "$RUNNER_TEMP/release-tags.txt"
+          if grep -Fxq -- "$RELEASE_TAG" "$RUNNER_TEMP/release-tags.txt"; then
+            echo "::notice::GitHub Release already exists; skipping creation."
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi
