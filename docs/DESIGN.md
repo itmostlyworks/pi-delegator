@@ -293,5 +293,5 @@ Ordinary Bash jobs have distinct groups in the owned session, so whole-session c
 - No shell interpolation in launch construction.
 - No delegator-owned run artifacts are written to the repository. Tester commands may create bounded generated artifacts or local test state as part of exercising behavior, but must clean them up.
 - Explicit tool allowlists per role.
-- Worker is the only role instructed to edit source. Reviewer and tester no-edit restrictions are prompt instructions, not enforced write protection, because Bash can write files. Tester may create bounded temporary/generated artifacts and local test state, with cleanup required.
+- Among bundled profiles, only worker's prompt permits source edits. Reviewer and tester have Bash access, so their no-edit prompt restrictions are not enforced write protection. Tester's prompt permits bounded temporary/generated artifacts and local test state and requires cleanup. Configured profiles may replace tool access and prompts; this is not a sandbox.
 - Output and diagnostics are bounded before entering parent model context.

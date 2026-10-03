@@ -47,11 +47,11 @@ By default, delegates use the parent's model and working directory. Independent 
 
 Add, replace, or disable profiles in `~/.pi/agent/pi-delegator.json`. Trusted projects can override them in `.pi/pi-delegator.json`. Profiles configure the model, thinking level, prompt, tools, and explicit skills or extensions. Restart Pi after changes. See the [configuration reference](docs/REQUIREMENTS.md#user-profile-configuration).
 
-Delegates do not inherit ambient extensions or skills. Runs are foreground-only, with no nested delegation, saved sessions, or resume. Cancelling a call stops the delegate and its owned subprocesses. Cleanup and returned output are bounded. This is not a sandbox; delegates have local system access through their allowed tools.
+Delegates do not inherit ambient extensions or skills. Runs are foreground-only, with no nested delegation, saved sessions, or resume. Cancellation performs bounded cleanup of the delegate's captured process session; cleanup failures are reported. Deliberate session escape is not contained, and abrupt parent death does not guarantee cleanup. Returned output is bounded. This is not a sandbox; delegates have local system access through their allowed tools. Reviewer and tester no-edit restrictions are prompt instructions, not enforced write protection.
 
-Run deadlines are optional. Delegates can recover from Bash command timeouts and continue working.
+Run deadlines are optional (`deadlineMs` in a profile). Delegates can recover from Bash command failures and timeouts after command cleanup, then continue working.
 
-The verified macOS fix is in Git, not npm yet; see [verification results](docs/RELEASE_CHECK.md).
+See [verification results](docs/RELEASE_CHECK.md) for the exercised lifecycle checks.
 
 ## Development
 

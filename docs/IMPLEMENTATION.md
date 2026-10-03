@@ -67,7 +67,7 @@ Acceptance:
 
 - Each profile launches with the expected default CLI contract.
 - Valid model overrides affect only the selected call; thinking cannot be supplied by the caller.
-- Reviewer is instructed not to modify files; its Bash access is not write protection. Oracle has no built-in write tools.
+- Bundled oracle has no mutation tools. Bundled reviewer has no edit/write tools, but its Bash access can mutate files; its no-edit restriction is a prompt instruction, not enforced write protection.
 - Tester receives bash for bounded behavioral verification but no edit/write tools.
 - Worker receives mutation tools.
 - Parallel calls keep outputs and lifecycle state isolated.
