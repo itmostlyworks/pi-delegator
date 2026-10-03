@@ -31,26 +31,13 @@ Do not trade lifecycle reliability for richer orchestration.
 
 Read Pi documentation and examples before using an API; do not guess extension behavior.
 
-- Extension documentation:
-  `/Users/ludwigbacklund/.nodenv/versions/26.5.0/lib/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md`
-- Official subagent example:
-  `/Users/ludwigbacklund/.nodenv/versions/26.5.0/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/`
-
-The official example demonstrates discovery, child invocation, JSON-mode parsing, and tool registration. Its process lifecycle is not sufficient for this project: it only signals the direct child rather than reliably cleaning up owned subprocesses. Reuse ideas, not those failure semantics.
-
-For targeted lifecycle reference only, inspect these installed `pi-subagents` files when needed:
-
-- `/Users/ludwigbacklund/.pi/agent/npm/node_modules/pi-subagents/src/runs/background/subagent-runner.ts`
-- `/Users/ludwigbacklund/.pi/agent/npm/node_modules/pi-subagents/src/runs/background/owned-process-tree.ts`
-- `/Users/ludwigbacklund/.pi/agent/npm/node_modules/pi-subagents/src/shared/post-exit-stdio-guard.ts`
-
-Do not copy its workflow, persistence, reconciliation, intercom, or artifact architecture.
+Locate `docs/extensions.md` and `examples/extensions/subagent/` in the installed `@earendil-works/pi-coding-agent` package. Use the example for API patterns, not process containment: direct-child signalling is insufficient for this project's cleanup guarantees.
 
 ## Engineering rules
 
 - TypeScript, ESM, strict typing.
 - Prefer Node built-ins and Pi exports. Add dependencies only when their value is clear.
-- Use `node:test` unless the repository establishes another test runner before implementation begins.
+- Use `node:test`.
 - Spawn with `shell: false` and argument arrays.
 - Child runs must disable extension and skill discovery to prevent recursion and ambient behavior.
 - Never wait exclusively on the child `close` event; descendants may keep pipes open.
@@ -64,7 +51,7 @@ Do not copy its workflow, persistence, reconciliation, intercom, or artifact arc
 
 ## Scope guard
 
-V1 must not include:
+Do not add:
 
 - async/background runs
 - resume or fork
@@ -78,7 +65,7 @@ V1 must not include:
 - provider fallback orchestration
 - fleet dashboards
 - durable run registries
-- project-controlled custom agent profiles
+- untrusted project-controlled agent profiles
 
 If implementation seems to require one of these, stop and explain the requirement before expanding scope.
 

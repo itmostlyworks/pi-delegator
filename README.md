@@ -61,7 +61,7 @@ npm run typecheck
 npm test
 ```
 
-Tests use a fake Pi executable, with no provider calls.
+Tests use a fake Pi executable, with no provider calls. See the [architecture](docs/DESIGN.md) and [testing guide](docs/IMPLEMENTATION.md) for contributor details.
 
 ## Releasing
 

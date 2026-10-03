@@ -1,198 +1,92 @@
-# Product requirements
+# Product contract
 
-## Problem
+`pi-delegator` exposes one Pi tool for a focused task in a fresh foreground subprocess. The parent receives compact progress and a final answer or a precise failure. There is no manager process or durable run state.
 
-Delegating a focused task to a fresh agent is useful, but existing subagent systems often combine that primitive with workflows, durable async state, scheduling, recovery, inter-agent communication, and rich fleet UI. The larger lifecycle surface has produced recurring hangs, misleading status, incomplete cancellation, and agent-type-specific surprises.
-
-We need a delegation primitive whose behavior is easy to understand, lets useful work continue, and stops reliably when cancelled. Bounded cleanup is not the same as a mandatory limit on task duration.
-
-## Goal
-
-Provide a Pi extension that lets the parent agent invoke one named delegate in a fresh Pi subprocess, observe compact progress, and receive a trustworthy final result or a precise failure.
-
-## Lifecycle priorities
-
-- A subcommand failure or supplied timeout is a recoverable tool result, not automatically a failed delegation. After command cleanup, the same delegate can retry, adapt, or report that it is blocked.
-- Parent cancellation reliably stops the delegate and its owned subprocesses.
-- Cleanup and post-completion drainage have bounded waits; output and diagnostics remain bounded.
-- Overall run deadlines are optional user-controlled safeguards, not mandatory profile limits. Without an explicit opt-in, there is no run timer.
-- Slow work or silence alone is not failure. Recovery does not reset or extend an explicitly configured overall deadline.
-
-Primary scenario: a delegate's command times out while working on a task. Once that command is cleaned up, the delegate receives the timeout as a tool error and can continue the same task without the parent restarting the delegation. The original timeout remains visible; recovery must not conceal cleanup failure.
-
-## Users
-
-The primary user is a Pi coding agent orchestrating local software work. A human observes the tool call but should not need to operate a separate fleet UI or recover durable run state.
-
-## V1 user stories
-
-1. As a parent agent, I can ask a scout to inspect a codebase without filling my context with discovery work.
-2. As a parent agent, I can ask a reviewer or oracle for a fresh-context opinion.
-3. As a parent agent, I can ask a tester to exercise a feature's real behavior and return evidence and a verdict.
-4. As a parent agent, I can hand one bounded implementation task to a worker.
-5. As a parent agent, I can launch several independent delegates through Pi's ordinary parallel tool calls.
-6. As a user, I can cancel the parent tool call and know the delegated process tree will be terminated.
-7. As a user, I can let a delegate work until completion or cancellation, and opt into an overall deadline when I need one.
-8. As a user, I receive the child's valid final answer even if an extension, watcher, or inherited subprocess prevents the child event loop or pipes from draining normally.
-9. As a parent agent, I do not have to restart a delegation merely because one of its commands fails or times out.
-
-## Public interface
-
-Register exactly one model-facing tool named `delegate`.
+## Tool interface
 
 ```ts
-interface DelegateInput {
-  agent: string; // constrained by the tool schema to an effective profile name
-  task: string;
-  model?: string;
-  cwd?: string;
-}
+delegate({ agent: "reviewer", task: "Review the current diff" })
 ```
 
-Rules:
+Optional fields: `model` and `cwd` (strings).
 
-- Exactly one child per call.
-- `task` must be non-empty and bounded in size.
-- `cwd` defaults to the parent context's cwd and must resolve to an existing directory.
-- `model`, when supplied, is a bounded Pi model selector passed to the child; otherwise the effective profile's model is used when non-null, then the parent model.
-- Thinking is not exposed to the calling agent. It comes from the effective profile; Pi may clamp it to the selected model's capabilities.
-- Overall deadlines require explicit user opt-in; bundled profiles do not impose them. Configured `deadlineMs` omitted or `null` disables the timer; explicit existing positive values remain active. There is no model-facing deadline input.
-- Unknown fields and names outside the immutable effective registry are rejected by the schema.
-- There are no generic per-call prompt or tool override fields. Profiles continue to own role authority and tool access.
+- Exactly one child per call; independent calls can run concurrently.
+- `agent` must name an enabled profile. Unknown fields are rejected.
+- `task` must be nonblank and at most 32 KiB UTF-8.
+- `cwd` defaults to the parent context's directory and must be an existing directory.
+- Model precedence: call override → profile model → parent model. Selectors are at most 256 UTF-8 bytes.
+- Thinking, prompts, tool access, and optional deadlines belong to profiles, not per-call overrides.
+- Children do not save sessions or discover ambient skills and extensions. Explicit profile capabilities are loaded instead.
 
-## Built-in delegates
+## Bundled profiles
 
-### Scout
+All bundled profiles inherit the parent's model and have no run deadline.
 
-- Purpose: fast local codebase reconnaissance
-- Default thinking: `low`
-- Tools: `read`, `grep`, `find`, `ls`
-- No default run deadline
-- No `bash`, write tools, skills, or extensions
+| Profile | Purpose | Thinking | Tools |
+| --- | --- | --- | --- |
+| `scout` | Local codebase reconnaissance | low | read, grep, find, ls |
+| `reviewer` | Correctness and maintainability review | high | read, grep, find, ls, bash |
+| `oracle` | Challenge assumptions and advise | high | read, grep, find, ls |
+| `tester` | Exercise real behavior and report evidence | high | read, grep, find, ls, bash |
+| `worker` | Implement and verify one bounded task | high | read, grep, find, ls, bash, edit, write |
 
-### Reviewer
-
-- Purpose: fresh-context correctness and maintainability review
-- Default thinking: `high`
-- Tools: `read`, `grep`, `find`, `ls`, `bash`
-- No default run deadline
-- Prompt instructs it not to modify files
-
-### Oracle
-
-- Purpose: challenge assumptions and advise on material decisions
-- Default thinking: `high`
-- Tools: `read`, `grep`, `find`, `ls`
-- No default run deadline
-- Prompt instructs it to advise, not implement
-
-### Tester
-
-- Purpose: exercise a feature's real behavior in a local, development, or test environment and report evidence
-- Default thinking: `high`
-- Tools: `read`, `grep`, `find`, `ls`, `bash`
-- No default run deadline
-- Prompt permits bounded generated state and short-lived local services, forbids source or configuration edits and production credentials/data, and requires cleanup plus a pass/fail/blocked verdict
-
-### Worker
-
-- Purpose: implement one clearly bounded task
-- Default thinking: `high`
-- Tools: `read`, `grep`, `find`, `ls`, `bash`, `edit`, `write`
-- No default run deadline
-- Prompt requires a concise change and validation report
-
-Bundled profile models are null, so the child inherits the parent model unless the call supplies an override. User configuration may add, atomically replace, or disable complete profiles. Complete definitions own model, thinking, role prompt, and tool allowlist; callers can override only the model for one invocation. Roles do not imply mandatory time budgets.
-
-Reviewer and tester no-edit restrictions are prompt instructions, not enforced write protection: their Bash access can modify files.
+Reviewer and tester no-edit restrictions are prompt instructions, not enforced write protection. Tester may create bounded test state and short-lived local services, must clean them up, and must not use production credentials or data. Delegation is not a sandbox.
 
 ## User profile configuration
 
-The bounded user document at the Pi agent directory's `pi-delegator.json` contains a `profiles` map. Each name maps to `null`, which disables it, or a complete definition containing `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, and `extensions`. `deadlineMs` is optional: omitted or `null` disables the timer; an explicit positive integer retains its safeguard, up to 2,147,483,647 ms (Node's timer maximum). Optional `displayName` is a trimmed, nonblank string bounded to 256 UTF-8 bytes. Human-facing labels use it, falling back to title-cased hyphen-separated identifiers; tool schemas and result `agent` identifiers are unchanged. Result details retain the optional name for rendering independently of the current registry. All other definition fields remain required. Definitions replace whole profiles; there is no inheritance or field merging. Prompt and capability paths resolve relative to the source document. Skills identify explicit local Markdown files or directories, and extensions identify explicit local JavaScript or TypeScript files. Capability paths are canonicalized and must be readable, supported, and unique; remote sources and pi-delegator itself are rejected before launch.
+The user configuration is `pi-delegator.json` in Pi's agent directory (normally `~/.pi/agent`). Trusted projects may override it with `.pi/pi-delegator.json` in the parent session's directory. Precedence is project → user → bundled.
 
-Configuration is immutable for each session. Trusted projects may provide the same document at `.pi/pi-delegator.json`; complete project entries replace or disable user and bundled entries. Invalid, incomplete, legacy, or unsafe sources prevent registration and identify the source, affected profile, and corrective action. Tool lists cannot enable nested `delegate` calls. Any optional deadline must be validated against supported timer limits rather than imposing a role-based work budget. Untrusted project documents are ignored, and delegate-call working directories never participate in profile discovery.
+Each entry in `profiles` is either `null` to disable a name or a complete profile definition. Entries replace whole profiles; fields are not merged. For example:
 
-## Progress behavior
+```json
+{
+  "profiles": {
+    "oracle": null,
+    "reviewer": {
+      "description": "Review correctness and maintainability",
+      "model": null,
+      "thinking": "high",
+      "prompt": "prompts/reviewer.md",
+      "tools": ["read", "grep", "find", "ls", "bash"],
+      "skills": [],
+      "extensions": []
+    }
+  }
+}
+```
 
-Progress is observational, never lifecycle authority.
+Required fields are `description`, `model`, `thinking`, `prompt`, `tools`, `skills`, and `extensions`.
 
-- Stream a compact update when the child starts a tool or completes an assistant message.
-- Include a bounded, whitespace-normalized preview of the latest non-empty assistant text alongside accumulated tool activity.
-- Do not persist every event.
-- Silence and elapsed time do not themselves mean failure; only an explicitly enabled overall deadline limits run duration.
-- Do not add package-imposed "fast-tool" deadlines. Command-supplied timeouts belong to tool execution and recovery, not delegation failure classification.
-- Avoid rendering a fleet, transcript browser, or attention state machine.
+- `model`: a selector or `null` to inherit the parent model.
+- `thinking`: `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`; Pi may clamp it for the selected model.
+- `prompt`: a readable, nonempty UTF-8 Markdown file, at most 64 KiB.
+- `tools`: a nonempty list of unique tool names; `delegate` is forbidden.
+- `skills`: explicit local Markdown files or directories.
+- `extensions`: explicit local JavaScript or TypeScript files.
+- Optional `displayName`: trimmed, nonblank, at most 256 UTF-8 bytes. Labels fall back to title-cased hyphen-separated identifiers; tool and result identifiers do not change.
+- Optional `deadlineMs`: a positive integer up to 2,147,483,647. Omission or `null` disables the overall run timer.
 
-## Success contract
+Paths resolve relative to the configuration file. Capability paths must be readable, supported, canonicalized, and unique; remote sources and pi-delegator itself are rejected. Configuration files are bounded to 16 KiB. Invalid sources prevent registration with corrective diagnostics.
 
-A run succeeds when:
+Configuration is immutable for a session; restart Pi after changes. Untrusted project configuration is ignored. Per-call working directories do not select configuration sources.
 
-- a valid terminal assistant text response was observed;
-- the child did not report an assistant error or abort;
-- the run was not cancelled and did not hit an explicitly enabled overall deadline; and
-- no protocol violation makes the terminal response untrustworthy.
+## Lifecycle and results
 
-A validated terminal answer remains a success if the runner subsequently has to terminate a child that failed to exit or drain. The result details should disclose forced cleanup. Earlier recoverable tool errors do not disqualify an otherwise valid final answer; success denotes completed delegation, not proof that every command or the requested task succeeded.
+- Useful work has no duration limit unless the user configures an overall deadline. Silence alone is not failure.
+- Bash command failures and supplied timeouts are recoverable tool errors after safe command-local cleanup. The same delegate may retry or adapt. Earlier background groups remain until whole-session cleanup.
+- Cancellation and overall deadline expiry are terminal. Recovery cannot extend a deadline.
+- Completion, cancellation, and deadline expiry clean up the captured POSIX session with bounded waits. Unsafe command cleanup is a terminal failure, not a recovered timeout.
+- A valid terminal assistant answer can succeed even if the runner must stop a child or drain its pipes afterward. Forced cleanup and verification failures are disclosed.
+- Success means the delegation completed, not that every command or the requested task succeeded. Assistant errors, aborts, and protocol violations cannot be disguised as successful answers.
+- Failures distinguish invalid input/cwd, unsupported platform, spawn failure, cancellation, overall timeout, cleanup failure, child/model error, missing terminal answer, and protocol error.
+- Progress is observational, not completion authority. Usage and cost are included in parent totals.
 
-## Failure contract
+Returned final text is bounded to 50 KiB with explicit truncation metadata; stderr to a 64 KiB tail; pending JSONL lines to 1 MiB. Progress is a compact summary, not a saved transcript. No full-output artifact is written.
 
-Failures must distinguish at least:
+Linux and macOS are supported; macOS requires Python 3 for session identification. Windows fails before launch. Deliberate session escape is outside containment, and abrupt parent death does not guarantee cleanup.
 
-- unknown agent or invalid input
-- invalid cwd
-- unsupported platform
-- spawn failure
-- parent cancellation
-- expiration of an explicitly enabled overall deadline
-- inability to safely clean up an interrupted command
-- child exit before a terminal answer
-- child/model error
-- malformed or oversized protocol output that prevents trustworthy completion
+## Scope
 
-Return bounded stderr and protocol diagnostics. Never disguise cancellation, an overall deadline expiry, or unsafe cleanup as ordinary successful completion. A command timeout must instead be visible to the delegate as a tool error, with continuation allowed after cleanup. This does not authorize silently stopping unrelated commands or earlier background services; command-local cleanup targets only the timed-out job's group; earlier background groups remain until whole-session cleanup.
+No background runs, resume/fork, nested delegation, workflow DSL or chains, scheduling, inter-agent communication, automatic worktrees, external runners, provider fallback orchestration, acceptance frameworks, fleet dashboards, or durable run registries. Trusted project profiles are supported; untrusted project profiles are not.
 
-## Output limits
-
-Initial limits:
-
-- task: 32 KiB UTF-8
-- model selector: 256 bytes UTF-8
-- pending JSONL line: 1 MiB
-- returned final text: 50 KiB
-- stderr tail: 64 KiB
-- progress text: compact summary only
-
-If final text is truncated, say so explicitly and report original byte size in result details. V1 does not write a full output artifact.
-
-## Non-goals
-
-V1 intentionally excludes:
-
-- persistent or background execution
-- workflow composition, branching, package-orchestrated whole-run retries, and chains (the delegate may retry its own commands)
-- retained conversations, resume, and fork
-- child-to-parent questions
-- nested subagents
-- agent creation or management UI
-- untrusted project-controlled agent definitions
-- automatic worktrees
-- external CLI/job providers
-- acceptance policy, mutation proofs, and host gates
-- durable artifact stores or lifecycle reconciliation
-- Windows process-tree support
-
-## Acceptance criteria
-
-1. The extension installs as a Pi package and registers `delegate`.
-2. With no configuration, all five bundled profiles retain their roles and tool access, without mandatory run deadlines. User configuration can add, replace, or disable complete profiles; valid model overrides affect only the selected call, and the tool schema exposes no thinking or deadline override.
-3. Children run with no sessions, ambient extension discovery, or skill discovery. A package-private Bash lifecycle extension is explicitly loaded for Bash-enabled profiles.
-4. A clean child result is streamed and returned.
-5. Parent abort scans and terminates live groups in the owned POSIX session within bounded cleanup windows.
-6. A supplied Bash timeout cleans up and verifies the affected job PGID and returns a recoverable Pi tool error; the same delegate can run another command and produce a valid final answer. Earlier background job groups are not terminated by command-local cleanup. Ordinary nonzero command exits are recoverable; unsafe cleanup is `cleanup_failed`, while parent abort remains terminal.
-7. After child exit or semantic completion, a descendant holding stdout/stderr open cannot keep the delegate tool pending indefinitely; whole-session cleanup scans same-session groups, including earlier background jobs.
-8. A valid terminal answer survives forced post-settle cleanup.
-9. Buffers and returned output obey the documented limits.
-10. Parallel delegate calls do not share mutable run state.
-11. Unit/integration tests cover the lifecycle matrix in `docs/IMPLEMENTATION.md`.
-12. Typecheck and tests pass with documented commands.
-13. An explicitly configured overall deadline terminates the delegate and its owned same-session groups and returns a run timeout; command recovery cannot extend it. Without opt-in, no overall run timer is armed. Session identity (`ps sess` on Linux, Python 3 `os.getsid()` on macOS) must be distinct and usable or launch fails early; deliberate session escape is excluded.
+See [architecture](DESIGN.md), [testing](IMPLEMENTATION.md), and [verification results](RELEASE_CHECK.md).

@@ -1,297 +1,119 @@
-# Technical design
-
-## Architectural summary
-
-`pi-delegator` is a Pi extension with one tool and one subprocess runner:
-
-```text
-parent Pi
-  └─ delegate tool
-      ├─ resolve one immutable effective profile
-      ├─ build explicit child CLI arguments
-      ├─ spawn a detached `/bin/sh` gate and exec Pi in an owned POSIX session
-      ├─ parse bounded JSONL events
-      ├─ stream compact progress
-      └─ finalize once with result, failure, or forced cleanup
-```
-
-There is no manager process, worker-script DSL, run registry, or persistence layer. Recovery here means the same running delegate may retry or adapt after a failed/timed-out subcommand; it is not package-orchestrated whole-run retry.
-
-## Suggested modules
-
-### `src/index.ts`
-
-- Registers the `delegate` tool with TypeBox.
-- Validates input and cwd.
-- Loads the bounded user source once, then resolves a session-scoped immutable registry after project trust is known.
-- Loads `.pi/pi-delegator.json` only from a trusted parent session cwd, with project → user → bundled precedence.
-- Generates the `agent` schema and descriptions from that registry.
-- Resolves the selected profile and calls `runDelegate` with Pi's tool `AbortSignal` and `onUpdate` callback.
-- Converts the runner outcome into a Pi tool result.
-- Keeps rendering minimal; default rendering is acceptable for V1.
-
-### `src/agents.ts`
-
-- Defines the five immutable bundled profiles.
-- Loads packaged Markdown prompt bodies and exports the bundled registry.
-- Provides the normalized internal profile type shared by bundled and configured profiles.
-- Centralizes human-facing labels: optional `displayName`, otherwise title-cased hyphen-separated identifiers. TUI calls/results and runner diagnostics share this helper.
-
-### `src/config.ts`
-
-- Reads bounded user and trusted-project sources once per session.
-- Validates complete profile replacements, disables, prompt files, tools, thinking, models, and any explicitly configured run deadline. Omitted or `null` `deadlineMs` disables the timer; existing explicit positive values remain active through 2,147,483,647 ms.
-- Resolves project entries over user and bundled profiles without inheritance or field merging.
-- Returns a deeply immutable effective registry; delegate-call working directories never affect discovery.
-
-Suggested profile type:
-
-```ts
-interface DelegateProfile {
-  name: string;
-  displayName?: string; // trimmed, nonblank, at most 256 UTF-8 bytes
-  description: string;
-  model: string | null;
-  tools: readonly string[];
-  skills: readonly string[];
-  extensions: readonly string[];
-  thinking: ThinkingLevel;
-  timeoutMs: number | null; // null by default; configured from optional deadlineMs
-  systemPrompt: string;
-}
-```
-
-### `src/runner.ts`
-
-- Owns one child invocation from spawn through finalization.
-- Creates and cleans the temporary prompt file when needed.
-- Builds CLI arguments.
-- Parses stdout through `protocol.ts`.
-- Captures bounded stderr.
-- Owns any configured run-deadline timer, bounded cleanup/drain timers, abort listener, process-control calls, and the single finalization gate.
-
-### `src/delegate-bash-extension.ts`
-
-- Private child-only extension loaded before configured extensions: Pi uses the first registration for each tool name.
-- Wraps Pi's public `createBashTool` with `BashOperations`: each operation starts a non-detached privileged supervisor with monitor mode enabled; the nested command Bash runs with monitor mode disabled (`+m`), in its own PGID within the delegate session. A private fd 3 handshake supplies the PGID within 1 second.
-- Uses `/bin/bash` or `bash` on `PATH`; custom Pi `shellPath` is not applied.
-- Command timeouts clean up and verify only the affected job PGID with fixed TERM → KILL windows, then return a recoverable Pi tool error; ordinary command failures also remain recoverable. Earlier background groups are retained. Failed containment/verification exits with reserved code 86 (`cleanup_failed`); abort exits with reserved code 87 (`cancelled`) and is terminal.
-- Settles on pipe close or a bounded post-exit drain wait, then removes listeners, clears timers, and destroys streams. Continuous background output cannot extend drainage.
-- A private environment marker gates registration and is removed from Bash command environments. This is not a security boundary.
-
-### `src/protocol.ts`
-
-- Incremental UTF-8 line buffering with a maximum pending-line size.
-- Discards oversized tool-result events through a bounded drain-to-newline mode; oversized assistant or unclassifiable lines remain protocol errors because they may affect completion authority.
-- Parses only event types needed to classify progress and completion.
-- Tracks assistant messages, errors, usage, turn/tool activity, and `agent_settled` when present. A later turn supersedes a transient failed attempt or stale terminal candidate from Pi's in-process continuation and provider-retry paths.
-- Unknown valid JSON events are ignored.
-- Non-JSON lines are retained only as bounded diagnostics unless the child protocol explicitly permits them.
-
-### `src/process-tree.ts`
-
-- Captures a distinct session key from the live detached launch gate before it execs Pi: `ps sess` on Linux, Python 3 `os.getsid()` on macOS (where `ps sess` can be a masked kernel pointer). Privileged gate authorization is private; fail early if session identification is unusable.
-- Scans and signals every live group in that session on normal completion, parent cancellation, and opted-in deadline, including reparented Bash jobs. Bounds process-query output/calls and TERM → KILL windows; failed verification is reported honestly. macOS refreshes PGIDs with `os.getpgid()` between two matching SID reads, retrying at most three times; only ESRCH permits omitting a process. Each `ps`/Python query has a 500 ms timeout and 1 MiB output cap (Linux `ps`: 250 ms). Python runs with `-I -S`; no packages are required.
-- No Windows fallback that silently downgrades to direct-child termination.
-
-Modules may be combined if the resulting code is easier to audit.
-
-## Child command
-
-Conceptual invocation:
-
-```bash
-pi \
-  --mode json \
-  --print \
-  --no-session \
-  --no-extensions \
-  --no-skills \
-  [--skill <explicit-local-path>]... \
-  [--extension <explicit-local-path>]... \
-  --model <effective-provider/model> \
-  --thinking <effective-level> \
-  --tools <profile-tools> \
-  --append-system-prompt <private-temp-file> \
-  'Task: <task>'
-```
-
-Requirements:
-
-- Resolve the current Pi executable robustly. Permit a private test override such as `PI_DELEGATOR_PI_BINARY`.
-- Use the caller's bounded model selector when supplied; otherwise use the effective profile model when non-null, then the active parent model.
-- Do not expose thinking to the caller; use the selected effective profile's level.
-- Use an argument array and `shell: false`.
-- Spawn in the requested cwd.
-- Set `detached: true` on POSIX for the `/bin/sh` launch gate; capture its new session key before authorizing exec of Pi.
-- Ignore stdin; pipe stdout/stderr.
-- Do not pass parent extension paths or session files.
-- Keep ambient extension and skill discovery disabled; add the private Bash extension first for Bash-enabled profiles, followed by the selected profile's validated explicit local capability paths with repeated CLI flags.
-- Preserve only the environment needed for provider authentication and normal Pi operation. V1 may inherit the environment, but must overwrite any internal recursion/depth variables it introduces.
-
-## Prompt assembly
-
-Use Pi's normal coding prompt plus an appended role prompt. This preserves ordinary coding behavior and project instruction discovery while the role prompt narrows authority.
-
-Role prompts must state:
-
-- the role's purpose;
-- the allowed scope;
-- that tasks remain bounded in scope and respect cancellation or an explicitly configured run deadline;
-- the expected final response format;
-- whether modification is forbidden or allowed;
-- that it must not launch nested agents or long-lived services.
-
-Temporary prompt files:
-
-- live under the OS temporary directory;
-- use mode `0600`;
-- contain no shell interpolation;
-- are deleted in finalization best-effort.
-
-## Protocol state
-
-The runner needs only small state:
-
-```ts
-interface ProtocolState {
-  finalText?: string;
-  assistantError?: string;
-  stopReason?: string;
-  agentSettled: boolean;
-  currentTools: Map<string, ActiveTool>;
-  usage: UsageSummary;
-  malformedLineCount: number;
-}
-```
-
-Do not retain the full transcript. Keep only information needed for progress, completion, diagnostics, and usage.
-
-### Terminal answer
-
-Treat a finalized assistant text message that represents a non-tool terminal stop as the candidate final answer. `agent_settled`, when received, strengthens completion evidence and begins post-settle drainage. An assistant error alone is not semantic completion because Pi may retry a transient provider failure inside the same child; only the settled final assistant outcome is authoritative.
-
-Do not require the OS process to exit cleanly before preserving a valid candidate answer. A leaked watcher can keep the process alive after semantically complete work.
-
-## Lifecycle state machine
-
-The public lifecycle should remain small:
-
-```text
-starting → running → terminal
-                    ├─ succeeded
-                    ├─ failed
-                    ├─ timed_out
-                    └─ cancelled
-```
-
-Cleanup state is internal metadata, not a second public lifecycle.
-
-### Single finalization gate
-
-Every exit path calls one idempotent `finalize(reason)` function. It must:
-
-1. win an atomic/in-memory `settled` guard;
-2. clear all timers;
-3. remove the parent abort listener;
-4. stop accepting stream data;
-5. destroy stdout/stderr if necessary;
-6. end or destroy temporary streams/files;
-7. clean the temporary prompt;
-8. return exactly one outcome.
-
-No callback may resolve/reject the outer promise independently.
-
-## Deadline, recovery, and cancellation
-
-### Optional run deadline
-
-No run-deadline timer is armed by default. A user may opt into an overall wall-clock safeguard; when configured, it covers startup, model calls, tools, and drainage. Its expiry terminates the delegate using bounded TERM → KILL cleanup and reports a run timeout, not a model answer. The tool must not wait indefinitely for perfect cleanup proof. Command recovery must not reset or extend an opted-in run deadline. Complete user/project profile definitions may omit `deadlineMs` or set it to `null` to disable the timer; explicit positive integers, including previously configured values, enable it up to Node's 2,147,483,647 ms timer maximum. Other fields remain required. Bundled profiles have `timeoutMs: null`; there is no caller deadline field.
-
-### Parent abort
-
-Cancellation always terminates the owned delegate process tree with bounded escalation and honest cleanup diagnostics, regardless of whether a run deadline is configured. If already aborted before spawn, do not launch. Parent cancellation is not a recoverable command failure.
-
-### Subcommand recovery
-
-A Bash timeout terminates only its isolated job group and verifies cleanup with bounded waits before reporting a recoverable Pi tool error to the same delegate. Earlier background groups remain until whole-session cleanup. A failed handshake or unverified cleanup is terminal `cleanup_failed` (exit 86), not a recovered timeout; abort is terminal `cancelled` (exit 87). Command-local PGID cleanup cannot contain deliberate regrouping within the command; whole-session cleanup still sees groups in the captured session. Do not add package-supplied fast-tool timers.
-
-## Exit and pipe drainage
-
-Node's child `exit` event can occur before `close`; descendants may keep stdout/stderr open forever. Therefore:
-
-- listen to both `exit` and `close`;
-- start a bounded post-exit pipe-drain timer on `exit`;
-- if pipes do not close, destroy them and finalize;
-- after a trustworthy semantic completion event, start a bounded process-drain timer even if `exit` has not fired;
-- if the child remains alive after semantic completion, clean up the captured session; preserve success if the terminal answer is valid and cleanup status is reported honestly. Cleanup that cannot be verified must not be silently presented as a clean completion.
-
-Forced cleanup after a valid terminal answer should be visible in result details:
-
-```ts
-interface CleanupDetails {
-  forced: boolean;
-  termSent: boolean;
-  killSent: boolean;
-  processExited: boolean;
-  pipesClosed: boolean;
-}
-```
-
-## Result model
-
-Suggested successful details:
-
-```ts
-interface DelegateResultDetails {
-  agent: string; // stable profile identifier
-  displayName?: string; // retained for rendering without registry lookup
-  model?: string;
-  thinking: string; // effective configured or built-in level
-  durationMs: number;
-  usage?: UsageSummary;
-  truncated: boolean;
-  originalBytes?: number;
-  cleanup: CleanupDetails;
-}
-```
-
-Failure details add a stable code such as:
-
-```ts
-type FailureCode =
-  | "unsupported_platform"
-  | "spawn_failed"
-  | "cancelled"
-  | "run_timeout"
-  | "cleanup_failed" // containment or cleanup not verified (reserved child exit 86)
-  | "protocol_error"
-  | "child_error"
-  | "missing_terminal_answer";
-```
-
-The user-visible message should name the agent, failure, elapsed time, current tool when known, and bounded stderr tail when useful.
-
-## Parallel safety
-
-Each `delegate` execution owns all mutable state in its function scope. Shared state is limited to immutable profiles. No global current-run variable, shared output path, or shared temporary prompt filename is allowed.
-
-Pi may execute multiple sibling delegate calls concurrently; tests must exercise this.
-
-## Platform policy
-
-V1 officially supports macOS and Linux. On `win32`, fail before spawning with a concise message explaining that reliable process-tree termination is not implemented. Do not silently fall back to `child.kill()` and claim equivalent guarantees.
-
-## Containment limits
-
-Ordinary Bash jobs have distinct groups in the owned session, so whole-session cleanup includes them. Command-local cleanup does not cover deliberate regrouping within a command. Deliberate `setsid`/session escape, including by trusted custom extensions, is not contained. Fail early if session identification is unavailable or unusable. Abrupt parent death is not Pi tool cancellation and does not guarantee immediate cleanup; no parent-death supervisor is provided.
-
-## Security
-
-- Effective names and complete profiles come only from bundled definitions, the bounded user source, and the trusted parent project's bounded source.
-- Project-controlled profile prompts are loaded only after `ctx.isProjectTrusted()` succeeds; delegate-call working directories cannot select profile sources.
-- No shell interpolation in launch construction.
-- No delegator-owned run artifacts are written to the repository. Tester commands may create bounded generated artifacts or local test state as part of exercising behavior, but must clean them up.
-- Explicit tool allowlists per role.
-- Among bundled profiles, only worker's prompt permits source edits. Reviewer and tester have Bash access, so their no-edit prompt restrictions are not enforced write protection. Tester's prompt permits bounded temporary/generated artifacts and local test state and requires cleanup. Configured profiles may replace tool access and prompts; this is not a sandbox.
-- Output and diagnostics are bounded before entering parent model context.
+# Current architecture
+
+`pi-delegator` exposes one foreground `delegate` tool. Each call owns one fresh
+Pi subprocess, bounded protocol state, and an idempotent finalization path.
+There is no manager process, persistence layer, or package-orchestrated run retry.
+Recovery means the same child can adapt after a safely cleaned-up command failure.
+
+See [requirements](REQUIREMENTS.md) for the public contract and
+[profile configuration](REQUIREMENTS.md#user-profile-configuration) for configuration.
+The [testing guide](IMPLEMENTATION.md) describes
+fixtures and lifecycle coverage; observed results live in [RELEASE_CHECK.md](RELEASE_CHECK.md).
+
+## Module map
+
+| Module | Responsibility |
+| --- | --- |
+| `src/index.ts` | Session-scoped tool registration, input/cwd validation, runner invocation, progress/result rendering, error propagation, and usage accounting. |
+| `src/agents.ts` | Immutable bundled profiles, packaged role prompts, normalized profile type, and human-facing labels. |
+| `src/config.ts` | Bounded configuration loading, complete-profile validation, canonical capability paths, and immutable project → user → bundled resolution. |
+| `src/runner.ts` | Child arguments, private prompt, launch gate, protocol/progress integration, deadlines, drainage, finalization, and result classification. |
+| `src/process-tree.ts` | Session identity capture, bounded process queries, whole-session group cleanup, and command-local PGID cleanup. |
+| `src/protocol.ts` | Incremental bounded JSONL parsing, terminal candidates, retry/continuation state, diagnostics, and usage. |
+| `src/delegate-bash-extension.ts` | Private child Bash override with job isolation, handshake, timeout recovery, and bounded drainage. |
+| `src/delegate-child-contract.ts` | Private child environment marker and reserved lifecycle exit codes. |
+| `src/display.ts` | Terminal-safe compact previews and observational tool/activity summaries. |
+| `src/bash-classification.ts` | Conservative Bash activity labels without rendering raw command arguments. |
+
+## Launch and child contract
+
+The runner resolves Pi, writes the appended role prompt to an OS temporary file
+with mode `0600`, and spawns a detached `/bin/sh` gate in the requested cwd.
+Launch uses argument arrays and `shell: false`; the gate execs Pi only after
+private stdin authorization. Closing the gate during cancellation prevents exec.
+
+Before authorization, the runner captures a usable session identity distinct
+from the parent's: Linux uses `ps sess`; macOS uses Python 3 `os.getsid()` because
+`ps sess` may be masked. macOS refreshes PGIDs with `os.getpgid()` between matching
+SID reads, retrying at most three times; only ESRCH permits omitting a process.
+Missing Python or unsafe identity fails launch rather than weakening containment.
+Python runs with `-I -S`. Process queries cap output at 1 MiB and time at 500 ms
+(Linux `ps`: 250 ms).
+
+Pi runs with `--mode json --print --no-session --no-extensions --no-skills`,
+explicit tools, model, thinking level, and `--append-system-prompt`.
+Only validated explicit local skills/extensions are added. Bash-enabled profiles
+load the private Bash extension first so its registration wins tool-name conflicts.
+The environment is inherited with the private child marker overwritten;
+stdout/stderr are piped. Parent sessions and ambient capabilities are not passed.
+Pi's normal coding prompt and project instructions remain active.
+
+## Private Bash lifecycle
+
+Each operation starts a non-detached privileged Bash supervisor with monitor
+mode enabled. Its command Bash uses `+m` in a separate PGID within the delegate
+session. A private fd 3 handshake must supply a safe PGID within one second.
+The shell is `/bin/bash` or `bash` on PATH, not Pi's custom `shellPath`.
+
+A supplied timeout terminates and verifies only that job PGID using bounded
+TERM → KILL windows, then returns a recoverable Pi tool error. Ordinary nonzero
+command exits are also recoverable. Earlier background groups remain until
+whole-session cleanup; command recovery never restarts the delegation.
+Failed containment or cleanup exits the child with reserved code 86
+(`cleanup_failed`); abort uses 87 (`cancelled`) and is terminal. These exits
+supersede any terminal answer already observed.
+
+Bash settles on pipe close or a fixed 100 ms post-exit drain, clears timers and
+listeners, and destroys streams. Continuous output cannot extend this wait.
+The registration marker is removed from command environments, not used as a
+security boundary. There are no package-imposed fast-command deadlines.
+
+## Protocol and completion
+
+The parser retains completion/progress/usage state, not a transcript. It handles
+split UTF-8 JSONL chunks and ignores unknown valid events. Malformed lines are
+counted without automatically preventing a later valid answer. Pending lines
+are capped at 1 MiB: safely classifiable nonterminal events can be discarded
+through bounded drain-to-newline mode; oversized assistant or unclassifiable
+output is a protocol error.
+
+A finalized assistant text with terminal stop reason is an answer candidate;
+`agent_settled` also supplies completion evidence. An assistant error alone
+cannot trigger semantic completion because Pi may retry in-process. Later turns
+invalidate stale candidates, and later successful assistant messages supersede
+transient errors. Progress and silence never decide lifecycle outcomes.
+
+## Finalization and cleanup
+
+No overall timer is armed without an explicit profile deadline. When enabled,
+it covers startup and useful work; command recovery does not reset it.
+An already-aborted call does not launch. Parent cancellation and deadline expiry
+are terminal, unlike recoverable command errors.
+
+Spawn/protocol failures, process completion, semantic completion, cancellation,
+and deadline expiry converge on one guarded finalizer. It stops accepting output,
+clears timers and the abort listener, closes the gate, terminates the captured
+session, destroys pipes, and removes the temporary prompt best-effort.
+Every completion path scans all live same-session groups, including reparented
+and earlier background jobs, with fixed TERM/KILL windows and honest verification.
+Default cleanup windows are 2 seconds for TERM and 1 second for KILL verification.
+
+The runner listens to both `exit` and `close`, never waiting exclusively on
+`close`. Post-exit and semantic-completion drains default to 250 ms; pipe-close
+verification after destruction is capped at 50 ms. A valid answer survives forced
+cleanup only when no authoritative error or cleanup diagnostic invalidates it.
+Results disclose forced cleanup, signals, process exit, and pipe closure.
+Failures remain distinct and are thrown through Pi's tool-error semantics.
+
+## Bounds, trust, and containment
+
+Returned text is capped at 50 KiB with explicit truncation/original-size metadata;
+stderr retains a 64 KiB tail. Each concurrent call owns its mutable run state and
+private prompt; shared profiles are immutable. No run artifacts enter the repo.
+Project profiles require parent-session trust; call cwd cannot select configuration.
+
+Linux and macOS are supported; Windows fails before spawn. Whole-session cleanup
+contains ordinary Bash jobs, not deliberate session escape. PGID-local cleanup
+cannot contain deliberate command regrouping. Abrupt parent death has no cleanup
+guarantee. Allowed tools have local system access: this is not a sandbox, and
+no-edit role prompts are not enforced write protection.
