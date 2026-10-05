@@ -39,10 +39,8 @@ export class DelegateStatus {
     try {
       if (this.ctx.mode !== "tui") return;
       const entries = [...this.counts];
-      const names = entries.slice(0, 2).map(([name, count]) =>
+      const names = entries.map(([name, count]) =>
         compactDisplayText(name, 19) + (count > 1 ? ` ×${count}` : ""));
-      const extra = entries.slice(2).reduce((total, [, count]) => total + count, 0);
-      if (extra > 0) names.push(`+${extra}`);
       this.ctx.ui.setStatus("pi-delegator", names.length
         ? this.ctx.ui.theme.fg("dim", `delegates: ${names.join(" · ")}`)
         : undefined);

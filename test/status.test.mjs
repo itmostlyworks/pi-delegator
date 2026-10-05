@@ -15,13 +15,13 @@ function observer(mode = "tui", throws = false) {
   return { ctx, values };
 }
 
-test("footer groups profiles and counts overflow runs, not distinct names", () => {
+test("footer shows every active profile and groups duplicate runs", () => {
   const { ctx, values } = observer();
   const status = new DelegateStatus(ctx);
   const finishes = ["worker", "worker", "scout", "tester", "tester", "oracle"].map(name => status.begin(name, ctx));
-  assert.equal(values.at(-1), "delegates: worker ×2 · scout · +3");
+  assert.equal(values.at(-1), "delegates: worker ×2 · scout · tester ×2 · oracle");
   finishes[0]();
-  assert.equal(values.at(-1), "delegates: worker · scout · +3");
+  assert.equal(values.at(-1), "delegates: worker · scout · tester ×2 · oracle");
   finishes[0](); // idempotent
   finishes.slice(1).forEach(finish => finish());
   assert.equal(values.at(-1), undefined);

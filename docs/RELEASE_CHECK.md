@@ -36,7 +36,7 @@ Automated checks on Linux, without provider calls:
 - `npm test` — exit 0; 181 passed.
 - `git diff --check` — exit 0.
 
-Coverage includes grouped parallel foreground/background counts, overflow run counts, wait cancellation without double-counting, settlement and failure cleanup, navigation/shutdown cleanup and cancelled-navigation reuse, stale-session isolation, terminal-safe labels, the built-in footer's `dim` theme color, non-TUI modes, and throwing UI observers. Live Pi footer rendering remains unverified.
+Coverage includes grouped parallel foreground/background counts, listing every active profile without an overflow counter, wait cancellation without double-counting, settlement and failure cleanup, navigation/shutdown cleanup and cancelled-navigation reuse, stale-session isolation, terminal-safe labels, the built-in footer's `dim` theme color, non-TUI modes, and throwing UI observers. Live Pi footer rendering remains unverified.
 
 ## Reproduce
 

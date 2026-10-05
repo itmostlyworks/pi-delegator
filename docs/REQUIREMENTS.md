@@ -41,7 +41,7 @@ Background runs reuse foreground cards. Foreground presentation is unchanged.
 
 ### Active delegate status
 
-The interactive footer shows active foreground and background runs using profile identifiers: `delegates: scout · worker ×2`. Duplicate profiles are grouped; at most two distinct names appear, followed by `+N` additional runs. Names are terminal-safe and bounded. Waits do not count separately, and settled uncollected runs are excluded. The status clears when no runs are active and on session replacement. Updates occur on launch and settlement, without polling or animation; display failures cannot affect execution or cleanup.
+The interactive footer shows active foreground and background runs using profile identifiers: `delegates: scout · worker ×2`. Every active profile is listed, with duplicate profiles grouped; there is no overflow counter. Names are terminal-safe and bounded. Pi may clip the status to the available terminal width. Waits do not count separately, and settled uncollected runs are excluded. The status clears when no runs are active and on session replacement. Updates occur on launch and settlement, without polling or animation; display failures cannot affect execution or cleanup.
 
 ## Bundled profiles
 

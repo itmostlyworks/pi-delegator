@@ -1034,7 +1034,7 @@ test("footer counts parallel foreground/background runs but not waits, and clear
     const foreground = tool.execute("footer-foreground", { agent: "worker", task: "Inspect" }, undefined, undefined, ctx);
     const starts = await Promise.all(["worker", "scout", "tester", "tester"].map((agent, i) =>
       tool.execute(`footer-start-${i}`, { action: "start", agent, task: "Inspect" }, undefined, undefined, ctx)));
-    assert.equal(values.at(-1), "delegates: worker ×2 · scout · +2");
+    assert.equal(values.at(-1), "delegates: worker ×2 · scout · tester ×2");
     const count = values.length;
     const controller = new AbortController();
     const waiting = tool.execute("footer-wait", { action: "wait", runId: starts[0].details.runId }, controller.signal, undefined, ctx);
