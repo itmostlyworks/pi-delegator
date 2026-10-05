@@ -29,88 +29,46 @@ fixtures and lifecycle coverage; observed results live in [RELEASE_CHECK.md](REL
 
 ## Session-owned background execution
 
-The top-level `background` boolean defaults to false. Configuration may contain
-only that setting; omission inherits the lower-precedence value. Trusted project
-configuration can override it independently of profiles. Untrusted project
-configuration is ignored.
+The top-level `background` boolean defaults to false and resolves independently
+of profiles through trusted project → user → bundled configuration. A
+background-only configuration is valid. Disabled mode preserves the foreground
+schema; enabled mode adds optional `action` and `runId` to one closed object.
+Execution validates run/start arguments versus wait arguments. Omitted action
+or `run` remains foreground.
 
-Disabled mode keeps the original closed foreground schema. Enabled mode adds
-optional `action` and `runId` to a single closed root object, with optional
-`agent`/`task` at schema level for provider compatibility. Execution validates
-combinations: run/start require agent/task and reject runId; wait accepts only
-action/runId. Omitted action or `run` remains foreground.
+`BackgroundRuns` owns each started run's promise and abort controller. `start`
+returns immediately with a monotonic session-local ID (`run-1`, `run-2`, …).
+The registry holds at most 32 uncollected runs, including completed outcomes.
+`wait` admits one waiter per run and collects success or failure once, freeing
+the slot. Cancelling a wait releases its claim without aborting or collecting
+the run, so a later wait can retry. The existing runner and cleanup guarantees
+are unchanged.
 
-`start` stores a promise and session-owned abort controller in `BackgroundRuns`,
-then returns a short ID (`run-1`, `run-2`, …) without waiting for the child.
-A registry-local monotonic counter survives collection and `cancelAll`; only a
-fresh session registry resets it. The existing runner and its
-cleanup guarantees are unchanged. All uncollected entries count toward the
-32-run cap, including completed outcomes. `wait` allows one active waiter and
-removes the entry on collection, including a failed outcome. Aborting the wait
-removes its listener and waiter claim, not the entry or owned controller; a
-later wait can collect the same run. Each bounded registry entry also stores
-profile/model/start-time/tool-call identity and a mutable bounded foreground-equivalent
-activity summary and usage. A start renderer registers one bounded settlement
-observer per run, separate from the admitted wait's progress subscription. The
-start observer receives no activity or heartbeat updates: settlement invalidates
-its card once and releases the observer; collection and closure also release it.
-Only an admitted pending wait subscribes to bounded progress and arms a one-second
-elapsed-time heartbeat, publishing foreground-equivalent updates through `onUpdate`.
-Without a wait there is no live activity. Settlement, wait cancellation, collection,
-and closure release wait subscriptions and timers. Throwing observers cannot change
-ownership or completion; the post-race abort check keeps settled runs retryable when
-an observer synchronously aborts its wait.
+Usage is charged only on collection, once. Success returns native usage; failure
+throws through Pi's tool-error semantics and attaches usage through `tool_result`.
+Uncollected failures send one visible custom diagnostic with `triggerTurn: false`,
+even without UI; an active waiter owns failure reporting instead.
 
-Successful collection returns native usage; failed collection throws through
-Pi's tool-error semantics and attaches usage via the existing `tool_result`
-hook. Usage is charged once on wait, never on start or for uncollected outcomes.
-Uncollected failures emit one displayable `pi-delegator-failure` custom message
-with `triggerTurn: false`, even without UI. An active waiter suppresses that
-notification. Reporting observers cannot affect lifecycle.
+Starts are static cards showing the original task, with one settlement
+invalidation replacing them with a compact Completed/Failed summary. Completed
+means delegation finished, not necessarily that the requested task succeeded.
+Only an admitted pending wait owns bounded activity and an elapsed-time heartbeat
+through `onUpdate`; only collection displays the answer or failure diagnostics.
+Run and tool-call identity prevent historical cards from binding to reused IDs;
+without matching state, saved starts are inactive rather than fabricated live runs.
+There is no dashboard or persistent registry, and foreground rendering is unchanged.
 
-Presentation stays in existing tool/result cards and the custom failure renderer.
-Saved result details carry the run ID, profile identity/display label, background
-status, a terminal-safe start task preview capped at 240 codepoints plus a truncation ellipsis, and outcome metadata; failed waits attach those details through the
-`tool_result` hook. Custom failure messages save the profile, ID, and diagnostic.
-Background call rows show only the operation (`Delegate · Start` or
-`Delegate · Wait`). The start renderer uses Pi's public `ToolRenderContext.invalidate()`
-(which invalidates the tool component and requests a redraw) once on settlement,
-not periodically or through `onUpdate` after execution. It checks both run ID and
-tool-call identity to prevent a historical card binding to a new session's reused
-ID. While work runs, starts show a static foreground-equivalent
-profile/`#N`/model/thinking heading marked Started, with no activity, elapsed-time,
-or usage repaint. The full original terminal-safe task from `ToolRenderContext.args`
-appears inside the result in both collapsed and expanded views, preserving line
-breaks and whitespace with a blank line separating heading and task, because the
-background call row remains operation-only. It is bounded by the existing task
-input limit; no full-task registry copy is retained. Missing call arguments fall
-back to the bounded saved preview, which also preserves whitespace.
-Settlement saves
-only a compact Completed/Failed status and duration in Pi's card-local renderer
-state; no answer, transcript, or invalidation callback is retained there.
-The settlement observer is released after its single invalidation or on collection
-or closure; it never owns a heartbeat. Completed describes delegation completion,
-not requested-task success.
+Settlement observers are separate from wait progress subscriptions. Observers
+cannot change lifecycle or billing. Settlement, collection, cancellation, and
+closure release the applicable observers, subscriptions, and timers; a cancelled
+wait remains retryable even if cancellation races with settlement.
 
-Admitted pending waits render foreground-equivalent profile/badge/model/thinking,
-bounded compact or expanded activity, and elapsed time through `onUpdate`, without
-repeating the task prompt. Their separate progress subscription and heartbeat are
-released on settlement, wait cancellation, collection, or closure. Wait alone
-renders collected answers or failure diagnostics. Historical starts without matching live state or
-a card-local summary show Started (inactive) and the original saved call task,
-or the bounded saved preview when call arguments are unavailable. Start collection instructions are expanded-only while running;
-terminal start summaries omit them to avoid stale hints after collection.
-Collected waits show expanded model/thinking, usage and cleanup. Model-facing content retains `run-N`;
-foreground rendering is unchanged. There is no dashboard or persistent registry.
-
-Pre-switch/fork/tree handlers cancel every owned run, await its runner finalizer,
-and clear the registry. They then reopen it so the current session remains
-usable if another extension cancels navigation. Shutdown closes it permanently;
-a new session gets a fresh registry. Closure suppresses ordinary cancellation
-notifications but still reports cleanup and other non-cancellation failures.
-Waiting for finalizers relies on the runner's bounded cancellation/cleanup,
-not a useful-work deadline. There is no persistence, resume, or orchestration
-beyond session-local start/wait.
+Before switch, fork, or tree navigation, handlers cancel owned runs, await bounded
+runner finalization, and clear the registry. They reopen it in case another
+extension cancels navigation. Shutdown closes it permanently; a new session gets
+a fresh registry. Closure suppresses ordinary cancellation notifications but
+still reports cleanup and other failures. Cleanup does not require a useful-work
+deadline. There is no persistence, resume, or broader orchestration.
 
 ## Launch and child contract
 

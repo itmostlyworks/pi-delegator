@@ -23,17 +23,21 @@ Optional fields: `model` and `cwd` (strings).
 With effective configuration `background: true`, the existing tool accepts optional `action` (`"run"`, `"start"`, or `"wait"`) and `runId`. Omitted action means `"run"` and preserves foreground behavior.
 
 - `run` and `start` require `agent` and `task`, accept optional `model` and `cwd`, and reject `runId`.
-- `start` returns a session-local `runId` immediately, not a final answer. IDs increase monotonically within the registry as `run-1`, `run-2`, etc.; collection and `cancelAll` do not reset the counter. A fresh session registry starts at `run-1`. The session owns the child after the call returns.
-- `wait` accepts only `action` and a nonblank `runId` (schema length 1–64), and collects the final answer or throws the failure once. Unknown/already-collected IDs and concurrent waits for the same ID fail.
+- `start` returns immediately with a session-owned `runId` (`run-1`, `run-2`, …), not an answer. IDs are not reused within a session.
+- `wait` accepts only `action` and a nonblank `runId` (1–64 characters). It collects the answer or throws the failure once. Unknown, collected, or concurrently waited IDs fail.
 - At most 32 uncollected background runs are retained, including completed successes and failures. Collection frees a slot; completion alone does not.
 - Cancelling `wait` leaves the run session-owned and available for another wait; it does not abort the child or collect usage.
-- With background disabled (the default), the original closed foreground schema is unchanged. When enabled, the schema remains one closed root object, not a union; action-dependent field combinations are validated at execution before launch or collection.
+- Background defaults to disabled, leaving the foreground schema unchanged. Action-specific fields are validated before launch or collection.
 
 ### Background presentation
 
-Background execution uses existing Pi tool/result cards and custom failure messages, not a dashboard. Background call rows are operation-only (`Delegate · Start` or `Delegate · Wait`). The already-returned start card is static while work runs: profile display name, short badge (`#1` for `run-1`), model/thinking, and Started status use foreground-equivalent heading formatting, without live activity, elapsed time, or usage repaint. Both collapsed and expanded starts show the full original terminal-safe task, preserving whitespace and line breaks without compression or truncation, with a blank line separating heading and task. Original task text comes from Pi's saved call arguments, bounded by the input limit, not a second registry copy. Model selectors use the same compact/expanded formatting. There is no periodic start invalidation; the start tool itself is finished, not pending. One settlement invalidation replaces the start with a compact Completed/Failed summary and duration, never a second answer. Completed means delegation finished, not that the requested task necessarily succeeded.
+Background runs use existing Pi cards, with call rows `Delegate · Start` and `Delegate · Wait`. Foreground presentation is unchanged.
 
-An admitted pending wait owns foreground-equivalent bounded tool/activity progress and an elapsed-time heartbeat through `onUpdate`, using the profile/badge/model/thinking heading and compact or expanded activity layout without duplicating the original task prompt. Without a pending wait there is no live activity. Wait collects once and alone displays the answer or diagnostics; successful collected headers show duration and failed ones say Failed. Collected expanded results show model/thinking, usage, and cleanup. Start cards and custom failure messages show exact collection instructions only when expanded and applicable. Model-facing content retains the full run ID. Saved details retain identity and a terminal-safe task preview capped at 240 codepoints plus a truncation ellipsis, preserving whitespace and line breaks. This bounded preview is used only when original call arguments are unavailable. Without matching live state or a card-local terminal summary, historical starts show Started (inactive) with the saved call's original task or that fallback preview, never fabricated live status. The settlement observer and admitted-wait progress subscription are separate and bounded within the existing registry. The start observer only invalidates once on settlement and is then released; wait progress and heartbeat stop on settlement or wait cancellation. Collection, navigation, and shutdown also release observers, subscriptions, and timers. Observers cannot affect lifecycle, collection, or billing; runner cleanup is unchanged. Foreground presentation is unchanged.
+- Start shows a static profile/`#N`/model/thinking/Started heading and full terminal-safe task in both views, preserving whitespace when saved call arguments are available. No periodic activity, elapsed-time, or usage repaint.
+- Settlement may repaint start once to a compact Completed/Failed summary and duration, never an answer. Completed means delegation finished, not necessarily task success.
+- Pending wait owns foreground-equivalent activity and elapsed time, without repeating the task. Collection replaces progress with the answer or diagnostics. Without wait, no live activity is shown.
+- Expanded collected results show model/thinking, usage, and cleanup. Collection instructions on starts and failure messages are expanded-only when applicable.
+- Historical starts without live state or a retained terminal summary show Started (inactive). Missing saved arguments fall back to a whitespace-preserving preview capped at 240 codepoints plus an ellipsis.
 
 ## Bundled profiles
 
@@ -53,7 +57,7 @@ Reviewer and tester no-edit restrictions are prompt instructions, not enforced w
 
 The user configuration is `pi-delegator.json` in Pi's agent directory (normally `~/.pi/agent`). Trusted projects may override it with `.pi/pi-delegator.json` in the parent session's directory. Precedence is project → user → bundled.
 
-The only top-level fields are `profiles` and optional boolean `background`. Background defaults to `false`; omission inherits the lower-precedence setting, while explicit `true` or `false` overrides it. Profiles and background resolve independently with trusted project → user → bundled precedence. A background-only file such as `{"background": true}` is supported and preserves inherited profiles. An empty root object, unknown top-level fields, or a nonboolean background value is invalid.
+Top-level fields are `profiles` and boolean `background` (default `false`). They inherit independently; an explicit background value overrides the lower-precedence setting. `{"background": true}` alone is valid and preserves inherited profiles. Empty objects, unknown fields, and nonboolean background values are invalid.
 
 Each entry in `profiles` is either `null` to disable a name or a complete profile definition. Entries replace whole profiles; fields are not merged. For example:
 
@@ -98,10 +102,9 @@ Configuration is immutable for a session; restart Pi after changes. Untrusted pr
 - A valid terminal assistant answer can succeed even if the runner must stop a child or drain its pipes afterward. Forced cleanup and verification failures are disclosed.
 - Success means the delegation completed, not that every command or the requested task succeeded. Assistant errors, aborts, and protocol violations cannot be disguised as successful answers.
 - Failures distinguish invalid input/cwd, unsupported platform, spawn failure, cancellation, overall timeout, cleanup failure, child/model error, missing terminal answer, and protocol error.
-- Progress is observational, not completion authority. Foreground usage and cost are included in parent totals. Background usage is included only on collection by `wait`, once, for both successful and failed results; `start`, failure notifications, and uncollected results do not add usage.
-- Uncollected background failures send a displayable custom diagnostic with `triggerTurn: false`, including without an interactive UI. An active waiter owns failure reporting instead. Diagnostics never control lifecycle.
-- Before session switch, fork, or tree navigation, all owned background runs are cancelled, runner finalizers are awaited, and the registry is cleared. If another extension cancels the transition, the current session can start new runs without another session-start event; previous IDs are gone.
-- Session shutdown cancels owned runs, awaits bounded runner cleanup, and clears the registry. Ordinary lifecycle cancellation is not announced as an uncollected failure; cleanup and other non-cancellation failures are still reported while closing. Results are session-local and never persisted or resumed.
+- Progress and display observers never control lifecycle or billing. Foreground usage counts toward parent totals; background usage counts once on collection, including failures.
+- Uncollected failures send visible diagnostics without triggering a model turn, including without UI. An active waiter owns failure reporting. Ordinary navigation/shutdown cancellation is silent; cleanup failures are still reported.
+- Before session switch, fork, tree navigation, or shutdown, cancel owned runs, await bounded cleanup, and clear results. Cancelled navigation leaves the session usable for new runs. Nothing is persisted or resumed.
 
 Returned final text is bounded to 50 KiB with explicit truncation metadata; stderr to a 64 KiB tail; pending JSONL lines to 1 MiB. Progress is a compact summary, not a saved transcript. No full-output artifact is written.
 
