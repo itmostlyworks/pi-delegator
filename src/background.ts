@@ -120,14 +120,14 @@ export class BackgroundRuns<T, M = undefined> {
     const run = this.runs.get(id);
     if (!run) throw new Error(`Unknown or already collected background delegate: ${id}`);
     if (run.waiting) throw new Error(`Background delegate already has a waiter: ${id}`);
-    if (signal?.aborted) throw new Error("Delegate wait cancelled; run remains session-owned");
+    if (signal?.aborted) throw new Error(`Stopped waiting for delegate ${id}; delegate not cancelled. Wait again to get the result.`);
     run.waiting = true;
     let abort: (() => void) | undefined;
     try {
       const cancelled = new Promise<never>((_resolve, reject) => {
         abort = () => {
           this.clearWaitingTimer(run);
-          reject(new Error("Delegate wait cancelled; run remains session-owned"));
+          reject(new Error(`Stopped waiting for delegate ${id}; delegate not cancelled. Wait again to get the result.`));
         };
         signal?.addEventListener("abort", abort, { once: true });
       });
@@ -140,7 +140,7 @@ export class BackgroundRuns<T, M = undefined> {
         run.waitingTimer.unref();
       }
       const value = await Promise.race([run.promise, cancelled]);
-      if (signal?.aborted) throw new Error("Delegate wait cancelled; run remains session-owned");
+      if (signal?.aborted) throw new Error(`Stopped waiting for delegate ${id}; delegate not cancelled. Wait again to get the result.`);
       this.clearObservation(run);
       this.runs.delete(id);
       return value;

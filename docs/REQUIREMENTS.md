@@ -26,18 +26,18 @@ With effective configuration `background: true`, the existing tool accepts optio
 - `start` returns immediately with a session-owned `runId` (`run-1`, `run-2`, …), not an answer. IDs are not reused within a session.
 - `wait` accepts only `action` and a nonblank `runId` (1–64 characters). It collects the answer or throws the failure once. Unknown, collected, or concurrently waited IDs fail.
 - At most 32 uncollected background runs are retained, including completed successes and failures. Collection frees a slot; completion alone does not.
-- Cancelling `wait` leaves the run session-owned and available for another wait; it does not abort the child or collect usage.
+- Cancelling `wait` leaves the run session-owned and available for another wait; it does not abort the child or collect usage. The cancellation message identifies the run, says waiting stopped and the delegate was not cancelled, and instructs the caller to wait again for the result.
 - Background defaults to disabled, leaving the foreground schema unchanged. Action-specific fields are validated before launch or collection.
 
 ### Background presentation
 
-Background runs use existing Pi cards, with call rows `Delegate · Start` and `Delegate · Wait`. Foreground presentation is unchanged.
+Background runs reuse foreground cards. Foreground presentation is unchanged.
 
-- Start shows a static profile/`#N`/model/thinking/Started heading and full terminal-safe task in both views, preserving whitespace when saved call arguments are available. No periodic activity, elapsed-time, or usage repaint.
-- Settlement may repaint start once to a compact Completed/Failed summary and duration, never an answer. Completed means delegation finished, not necessarily task success.
-- Pending wait owns foreground-equivalent activity and elapsed time, without repeating the task. Collection replaces progress with the answer or diagnostics. Without wait, no live activity is shown.
-- Expanded collected results show model/thinking, usage, and cleanup. Collection instructions on starts and failure messages are expanded-only when applicable.
-- Historical starts without live state or a retained terminal summary show Started (inactive). Missing saved arguments fall back to a whitespace-preserving preview capped at 240 codepoints plus an ellipsis.
+- Start uses `Delegate · Profile · Start` and the foreground terminal-safe task formatting: abbreviated and whitespace-normalized collapsed, full and whitespace-preserving expanded. The task stays in the call, not duplicated in the result.
+- The static start result shows profile/model/thinking/Started. Settlement may repaint it once to Completed/Failed and duration, never an answer. No periodic activity, elapsed-time, or usage repaint. Completed means delegation finished, not necessarily task success.
+- Wait uses `Delegate · Wait · run-N`; this call identifies the run without repeating IDs or badges in result headings. Pending wait uses exactly foreground activity and elapsed-time formatting. Collection replaces progress with the answer or diagnostics, using foreground result formatting plus Completed/Failed.
+- Human cards contain no collection instructions or extra usage/cleanup rows. Model-facing start returns retain retrieval instructions. Uncollected failure notifications identify the run for linkage.
+- Historical starts cannot bind to another tool call's reused run ID. Without matching live state or a retained terminal summary they show Started (inactive).
 
 ## Bundled profiles
 

@@ -125,10 +125,6 @@ function runBadge(runId: string): string {
   return /^run-[1-9][0-9]*$/u.test(runId) ? `#${runId.slice(4)}` : compactDisplayText(runId, 64);
 }
 
-function collectionInstruction(runId: string): string {
-  return `Collect with delegate({action: "wait", runId: ${JSON.stringify(terminalSafe(runId))}}).`;
-}
-
 function formatFailure(failure: DelegateFailure): string {
   const stderr = failure.stderr.trim();
   const stderrDiagnostic = stderr ? `\nStderr tail:\n${stderr}` : "";
@@ -240,21 +236,7 @@ function formatRenderedResult(
       : compactModelSelector(details.model);
   let header =
     theme.fg("toolTitle", theme.bold(compactDisplayText(profileLabel(details.agent, details.displayName), 64)));
-  if (details.runId === undefined || details.backgroundStatus === "waiting") {
-    if (details.runId !== undefined) header += theme.fg("muted", ` · ${runBadge(details.runId)}`);
-    header += theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${formatDuration(details.durationMs)}${isPartial ? " · Running" : ""}`);
-  } else {
-    header += theme.fg("muted", ` · ${runBadge(details.runId)} · ${
-      details.backgroundStatus === "started" ? "Started" : details.backgroundStatus === "failed" ? "Failed" : formatDuration(details.durationMs)
-    }`);
-    if (expanded) {
-      header += theme.fg("muted", `\n${compactDisplayText(model, 256)} · ${details.thinking} · ${formatDuration(details.durationMs)}`);
-      if (details.backgroundStatus !== "started") {
-        header += theme.fg("muted", `\nUsage: ${details.usage.input} in · ${details.usage.output} out · $${details.usage.cost.toFixed(4)}`);
-        header += theme.fg("muted", `\nCleanup: ${details.cleanup.diagnostic ? compactDisplayText(details.cleanup.diagnostic, 1_000) : "verified"}${details.cleanup.forced ? " · forced" : ""} · exit ${details.exitCode ?? "unknown"}`);
-      }
-    }
-  }
+  header += theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${formatDuration(details.durationMs)}${isPartial ? " · Running" : details.backgroundStatus === "failed" ? " · Failed" : details.backgroundStatus === "completed" ? " · Completed" : ""}`);
   let renderedText = resultText(content);
   if (details.backgroundStatus === "failed" && details.runId !== undefined) {
     const prefix = `${profileLabel(details.agent, details.displayName)} · ${runBadge(details.runId)} · `;
@@ -263,16 +245,11 @@ function formatRenderedResult(
   const output = formatRenderedOutput(
     expanded && isPartial && details.expandedProgress !== undefined
       ? details.expandedProgress
-      : details.backgroundStatus === "started" && details.runId !== undefined
-        ? details.taskPreview ?? ""
-        : renderedText,
+      : renderedText,
     expanded || isPartial,
     theme,
   );
-  const instruction = expanded && details.backgroundStatus === "started" && details.runId !== undefined
-    ? theme.fg("muted", `\n${collectionInstruction(details.runId)}`)
-    : "";
-  return header + (output ? `\n${output}` : "") + instruction;
+  return header + (output ? `\n${output}` : "");
 }
 
 async function resolveWorkingDirectory(requested: string | undefined, parentCwd: string): Promise<string> {
@@ -484,11 +461,8 @@ function registerDelegateTool(
     },
 
     renderCall(args, theme, context) {
-      if ("action" in args && args.action === "start") {
-        return new Text(theme.fg("toolTitle", theme.bold("Delegate · Start")), 0, 0);
-      }
       if ("runId" in args) {
-        return new Text(theme.fg("toolTitle", theme.bold("Delegate · Wait")), 0, 0);
+        return new Text(theme.fg("toolTitle", theme.bold("Delegate · Wait")) + theme.fg("muted", ` · ${compactDisplayText(String(args.runId), 64)}`) + "\n", 0, 0);
       }
       const task = typeof args.task === "string"
         ? context.expanded ? terminalSafe(args.task) : compactDisplayText(args.task, 240)
@@ -498,7 +472,7 @@ function registerDelegateTool(
       const title = name === undefined
         ? "Delegate"
         : `Delegate · ${compactDisplayText(profileLabel(name, profile?.displayName), 64)}`;
-      return new Text(theme.fg("toolTitle", theme.bold(title)) + "\n" + theme.fg("toolOutput", task) + "\n", 0, 0);
+      return new Text(theme.fg("toolTitle", theme.bold(title + ("action" in args && args.action === "start" ? " · Start" : ""))) + "\n" + theme.fg("toolOutput", task) + "\n", 0, 0);
     },
 
     renderResult(result, { expanded, isPartial }, theme, context) {
@@ -508,8 +482,7 @@ function registerDelegateTool(
         // Keep only a compact terminal summary after collection, never the answer.
         const state = context.state as StartCardState | undefined;
         const runId = details.runId;
-        // Pi retains the original call arguments; saved details are only a bounded fallback.
-        const task = typeof context.args?.task === "string" ? context.args.task : details.taskPreview ?? "";
+        // Historical calls must not bind to a different call's session-local run ID.
         const candidate = runs.snapshot(runId);
         const snapshot = candidate?.metadata?.toolCallId === context.toolCallId ? candidate : undefined;
         const saveSummary = (value: BackgroundOutcome | undefined) => {
@@ -528,21 +501,16 @@ function registerDelegateTool(
             context.invalidate();
           });
         }
-        const label = `${compactDisplayText(profileLabel(details.agent, details.displayName), 64)} · ${runBadge(details.runId)}`;
+        const label = compactDisplayText(profileLabel(details.agent, details.displayName), 64);
         const summary = state?.summary;
         const metadata = snapshot?.metadata;
         const running = snapshot !== undefined && !snapshot.settled;
         const status = summary?.status ?? (snapshot?.settled ? (snapshot.value && ("error" in snapshot.value || !snapshot.value.result.ok) ? "Failed" : "Completed") : running ? "Started" : "Started (inactive)");
         const duration = summary?.durationMs ?? (metadata ? Math.max(0, Date.now() - metadata.startedAt) : details.durationMs);
-        let text = theme.fg("toolTitle", theme.bold(label));
-        if (status === "Started" || status === "Started (inactive)") {
-          const model = details.model === undefined ? "default model" : expanded ? details.model : compactModelSelector(details.model);
-          text += theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${status}`);
-          if (task) text += "\n\n" + theme.fg("toolOutput", terminalSafe(task));
-        } else {
-          text += theme.fg("muted", ` · ${status} · ${formatDuration(duration)}`);
-        }
-        if (expanded && running) text += theme.fg("muted", `\n${collectionInstruction(details.runId)}`);
+        const model = details.model === undefined ? "default model" : expanded ? details.model : compactModelSelector(details.model);
+        let text = theme.fg("toolTitle", theme.bold(label))
+          + theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)}`);
+        text += theme.fg("muted", ` · ${status}${summary || snapshot?.settled ? ` · ${formatDuration(duration)}` : ""}`);
         return new Text(text, 0, 0);
       }
       const text = details === undefined
@@ -561,8 +529,8 @@ export default function piDelegator(pi: ExtensionAPI): void {
   pi.registerMessageRenderer<BackgroundFailureDetails>("pi-delegator-failure", (message, { expanded }, theme) => {
     const details = message.details;
     if (!details) return new Text(formatRenderedOutput(resultText(typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content), expanded, theme), 0, 0);
-    const title = `${compactDisplayText(profileLabel(details.agent, details.displayName), 64)} · ${runBadge(details.runId)} · Failed`;
-    return new Text(theme.fg("error", theme.bold(title)) + "\n" + formatRenderedOutput(details.diagnostic, expanded, theme) + (expanded ? theme.fg("muted", `\nWhile the session is active, ${collectionInstruction(details.runId)}`) : ""), 0, 0);
+    const title = `${compactDisplayText(profileLabel(details.agent, details.displayName), 64)} · ${compactDisplayText(details.runId, 64)} · Failed`;
+    return new Text(theme.fg("error", theme.bold(title)) + "\n" + formatRenderedOutput(details.diagnostic, expanded, theme), 0, 0);
   });
 
   pi.on("tool_result", (event) => {
@@ -599,7 +567,7 @@ export default function piDelegator(pi: ExtensionAPI): void {
           : outcome.result.ok ? "" : `[${outcome.result.code}] ${compactDisplayText(outcome.result.message + (outcome.result.cleanup.diagnostic ? ` Cleanup: ${outcome.result.cleanup.diagnostic}` : ""), 1_000)}`;
         pi.sendMessage({
           customType: "pi-delegator-failure",
-          content: `${compactDisplayText(profileLabel(outcome.profile.name, outcome.profile.displayName), 64)} · ${runBadge(runId)} · Failed\nUncollected background delegate ${runId}: ${diagnostic}. While the session is active, use delegate wait to collect diagnostics.`,
+          content: `${compactDisplayText(profileLabel(outcome.profile.name, outcome.profile.displayName), 64)} · ${runId} · Failed\nUncollected background delegate ${runId}: ${diagnostic}.`,
           display: true,
           details: {
             runId,

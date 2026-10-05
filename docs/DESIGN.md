@@ -49,19 +49,28 @@ throws through Pi's tool-error semantics and attaches usage through `tool_result
 Uncollected failures send one visible custom diagnostic with `triggerTurn: false`,
 even without UI; an active waiter owns failure reporting instead.
 
-Starts are static cards showing the original task, with one settlement
-invalidation replacing them with a compact Completed/Failed summary. Completed
-means delegation finished, not necessarily that the requested task succeeded.
+Start call cards reuse foreground profile/task formatting, adding only Start.
+Tasks are abbreviated collapsed and full expanded, not duplicated in results.
+The static profile/model/thinking/Started result heading receives one settlement
+invalidation to Completed/Failed and duration, never an answer. Completed means
+delegation finished, not necessarily that the requested task succeeded.
 Only an admitted pending wait owns bounded activity and an elapsed-time heartbeat
-through `onUpdate`; only collection displays the answer or failure diagnostics.
-Run and tool-call identity prevent historical cards from binding to reused IDs;
-without matching state, saved starts are inactive rather than fabricated live runs.
-There is no dashboard or persistent registry, and foreground rendering is unchanged.
+through `onUpdate`, rendered exactly like foreground progress. Wait calls identify
+the run; result headings have no run badges. Only collection displays the answer
+or failure diagnostics, using foreground formatting plus Completed/Failed.
+Original tool-call identity prevents historical starts binding to another call's
+reused run ID; unmatched saved starts are inactive, not fabricated live runs.
+Human cards have no collection instructions or extra usage/cleanup rows; the
+model-facing start response retains retrieval instructions. Failure notifications
+identify the run and render directly from saved details. There is no availability
+observer or UI UUID machinery, dashboard, or persistent registry.
 
 Settlement observers are separate from wait progress subscriptions. Observers
 cannot change lifecycle or billing. Settlement, collection, cancellation, and
 closure release the applicable observers, subscriptions, and timers; a cancelled
-wait remains retryable even if cancellation races with settlement.
+wait remains retryable even if cancellation races with settlement. Cancellation
+wording identifies the run and explains that waiting stopped, the delegate was
+not cancelled, and another wait can collect its result.
 
 Before switch, fork, or tree navigation, handlers cancel owned runs, await bounded
 runner finalization, and clear the registry. They reopen it in case another

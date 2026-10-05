@@ -59,9 +59,9 @@ const started = delegate({ action: "start", agent: "scout", task: "Find authenti
 delegate({ action: "wait", runId: "run-1" })
 ```
 
-`start` returns a session-local run ID immediately; `wait` collects its answer or failure once. Cancelling a wait leaves the run available to wait again. Usage counts only on collection. At most 32 uncollected runs are retained, including completed ones. Omitted `action` or `"run"` remains foreground.
+`start` returns a session-local run ID immediately; `wait` collects its answer or failure once. Cancelling a wait stops waiting, not the delegate; the message identifies the run and tells you to wait again for its result. Usage counts only on collection. At most 32 uncollected runs are retained, including completed ones. Omitted `action` or `"run"` remains foreground.
 
-The start card shows the full task and stays static until a compact Completed/Failed summary replaces it. Only a pending wait shows live activity and elapsed time; only wait shows the collected result. Completed means delegation finished, not necessarily that the requested task succeeded.
+Start uses the foreground profile/task call card, marked Start: the task is abbreviated when collapsed and full when expanded. Its static result heading changes from Started to Completed/Failed on settlement, without showing the answer. Wait identifies the run and uses foreground progress and result formatting; only wait shows the collected answer. Human cards contain no collection instructions or run badges. Completed means delegation finished, not necessarily that the requested task succeeded.
 
 Uncollected failures produce a visible diagnostic without triggering a model turn. Session navigation or shutdown cancels runs and clears results; nothing is persisted or resumed. See the [tool contract](docs/REQUIREMENTS.md#tool-interface) for details.
 

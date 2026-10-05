@@ -86,7 +86,7 @@ test("cancelling a wait retains ownership and reports a later failure once", asy
     const waiting = runs.wait(id, controller.signal);
     await tick();
     controller.abort();
-    await assert.rejects(waiting, /wait cancelled.*session-owned/);
+    await assert.rejects(waiting, /Stopped waiting for delegate run-1; delegate not cancelled\. Wait again to get the result\./);
     assert.equal(ownedSignal.aborted, false);
     const failure = { ok: false, message: "failed" };
     work.resolve(failure);
@@ -121,7 +121,7 @@ for (const ok of [true, false]) {
           assert.equal(observed, metadata);
           controller.abort();
           if (throws) throw new Error("observer");
-        }), /wait cancelled.*session-owned/);
+        }), /Stopped waiting for delegate run-1; delegate not cancelled\. Wait again to get the result\./);
         assert.equal(observerCalls, 1);
         assert.equal(ownedSignal.aborted, false);
         assert.deepEqual(getEventListeners(controller.signal, "abort"), []);
@@ -146,7 +146,7 @@ test("an already cancelled wait does not collect or abort its run", async () => 
   try {
     const controller = new AbortController();
     controller.abort();
-    await assert.rejects(runs.wait(id, controller.signal), /wait cancelled/);
+    await assert.rejects(runs.wait(id, controller.signal), /Stopped waiting for delegate/);
     work.resolve("still owned");
     assert.equal(await runs.wait(id), "still owned");
   } finally {
@@ -323,7 +323,7 @@ test("invalid waits and waits without callbacks arm no timer", async (t) => {
     await assert.rejects(runs.wait("missing", undefined, observer), /Unknown/);
     const controller = new AbortController();
     controller.abort();
-    await assert.rejects(runs.wait(id, controller.signal, observer), /wait cancelled/);
+    await assert.rejects(runs.wait(id, controller.signal, observer), /Stopped waiting for delegate/);
     const waiting = runs.wait(id);
     await assert.rejects(runs.wait(id, undefined, observer), /already has a waiter/);
     assert.equal(intervals.mock.callCount(), 0);
@@ -362,7 +362,7 @@ for (const synchronous of [true, false]) {
       assert.equal(calls, expectedCalls);
       t.mock.timers.tick(3000);
       assert.equal(calls, expectedCalls, "abort detaches timer synchronously");
-      await assert.rejects(waiting, /wait cancelled/);
+      await assert.rejects(waiting, /Stopped waiting for delegate/);
       assert.deepEqual(getEventListeners(controller.signal, "abort"), []);
       assert.equal(settlements, 0);
       const retry = runs.wait(id, undefined, () => { calls += 1; });

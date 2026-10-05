@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { Container } from "@earendil-works/pi-tui";
 
 import {
   ORACLE_PROFILE,
@@ -14,7 +15,7 @@ import {
   WORKER_PROFILE,
 } from "../src/agents.ts";
 import { DELEGATE_CONFIG_FILENAME } from "../src/config.ts";
-import { renderProgress, terminalSafe } from "../src/display.ts";
+import { compactDisplayText, renderProgress, terminalSafe } from "../src/display.ts";
 import piDelegator, { MAX_MODEL_BYTES, MAX_TASK_BYTES } from "../src/index.ts";
 
 function registeredTool(config, session = {}) {
@@ -31,6 +32,7 @@ function registeredTool(config, session = {}) {
     piDelegator({
       registerTool(definition) {
         tool = definition;
+        session.tool = definition;
       },
       registerMessageRenderer(customType, renderer) {
         (session.messageRenderers ??= new Map()).set(customType, renderer);
@@ -85,6 +87,60 @@ const plainTheme = {
 function renderText(component, width = 200) {
   return component.render(width).map((line) => line.trimEnd()).join("\n");
 }
+
+test("background cards preserve foreground gaps and output whitespace", () => {
+  const tool = registeredTool({ background: true });
+  const task = "Inspect\n\n  authentication";
+  const output = " first line\n\n  second line\n";
+  const details = { agent: "scout", model: "provider/model", thinking: "low", durationMs: 1_000 };
+  const width = 100;
+  const paddedLines = (text) => text.split("\n").map((line) => line.padEnd(width));
+  // Pi adds call and result directly to one container, without a spacer.
+  // Check raw rendered lines, including whitespace and blank-line padding.
+  const cardLines = (call, result) => {
+    const card = new Container();
+    card.addChild(call);
+    card.addChild(result);
+    return card.render(width);
+  };
+
+  for (const expanded of [false, true]) {
+    const model = expanded ? "provider/model" : "model";
+    for (const action of [undefined, "run", "start"]) {
+      const call = tool.renderCall({ agent: "scout", task, ...(action ? { action } : {}) }, plainTheme, { expanded });
+      const callText = `Delegate · Scout${action === "start" ? " · Start" : ""}\n${expanded ? task : "Inspect authentication"}\n`;
+      assert.equal(call.text, callText);
+      const result = tool.renderResult({
+        content: [{ type: "text", text: output }],
+        details: { ...details, ...(action === "start" ? { backgroundStatus: "started", runId: "run-1" } : {}) },
+      }, { expanded, isPartial: false }, plainTheme, {});
+      const resultText = action === "start"
+        ? `Scout · ${model} · low · Started (inactive)`
+        : `Scout · ${model} · low · 1s\n${output}`;
+      assert.equal(result.text, resultText);
+      assert.deepEqual(cardLines(call, result), [...paddedLines(callText), ...paddedLines(resultText)]);
+    }
+
+    for (const [isPartial, backgroundStatus, status] of [
+      [true, undefined, "Running"],
+      [false, "completed", "Completed"],
+      [false, "failed", "Failed"],
+    ]) {
+      const call = tool.renderCall({ action: "wait", runId: "run-1" }, plainTheme, { expanded });
+      const callText = "Delegate · Wait · run-1\n";
+      assert.equal(call.text, callText);
+      const result = tool.renderResult({ content: [{ type: "text", text: output }],
+        details: { ...details, runId: "run-1", backgroundStatus } },
+      { expanded, isPartial }, plainTheme, {});
+      const resultText = `Scout · ${model} · low · 1s · ${status}\n${output}`;
+      assert.equal(result.text, resultText);
+      assert.deepEqual(cardLines(call, result), [...paddedLines(callText), ...paddedLines(resultText)]);
+      const foreground = tool.renderResult({ content: [{ type: "text", text: output }], details },
+        { expanded, isPartial }, plainTheme, {});
+      assert.deepEqual(result.render(width).slice(1), foreground.render(width).slice(1), "wait preserves foreground output whitespace");
+    }
+  }
+});
 
 test("registers exactly the delegate tool with a closed five-profile schema", () => {
   const tool = registeredTool();
@@ -957,13 +1013,10 @@ async function startBackground(tool, signal) {
   assert.equal(result.details.taskPreview, "Inspect");
   assert.equal(result.content[0].text, `Started background delegate ${runId}. Collect with delegate({action: "wait", runId: "${runId}"}).`);
   for (const expanded of [false, true]) {
-    assert.equal(renderText(tool.renderCall({ action: "start", agent: "scout", task: "Inspect" }, plainTheme, { expanded })), "Delegate · Start");
+    assert.equal(renderText(tool.renderCall({ action: "start", agent: "scout", task: "Inspect" }, plainTheme, { expanded })), "Delegate · Scout · Start\nInspect\n");
     const rendered = renderText(tool.renderResult(result, { expanded, isPartial: false }, plainTheme, {}));
-    const badge = `#${runId.slice(4)}`;
-    assert.equal(rendered, `Scout · ${badge} · ${expanded ? "example/model" : "model"} · low · Started (inactive)\n\nInspect`);
-    assert.doesNotMatch(rendered, /Collect with|Usage:|Cleanup:|Running/);
-    assert.equal(rendered.split(badge).length - 1, 1, "start badge appears only in the header");
-    if (!expanded) assert.ok(!rendered.includes(runId), "collapsed UI should show only the short badge");
+    assert.equal(rendered, `Scout · ${expanded ? "example/model" : "model"} · low · Started (inactive)`);
+    assert.doesNotMatch(rendered, /Collect with|Usage:|Cleanup:|Running|#\d|run-\d|Inspect/);
   }
   return runId;
 }
@@ -1048,14 +1101,14 @@ test("background start saves a bounded safe task preview for history without cha
     const historyTool = registeredTool();
     const renderSaved = () => {
       for (const expanded of [false, true]) {
-        assert.equal(renderText(historyTool.renderCall(args, plainTheme, { expanded })), "Delegate · Start");
+        assert.equal(tool.renderCall(args, plainTheme, { expanded }).text, `Delegate · Scout · Start\n${expanded ? terminalSafe(task) : compactDisplayText(task, 240)}\n`);
         const rendered = renderText(historyTool.renderResult({ ...saved, content: [{ type: "text", text: "unrelated fallback" }] },
           { expanded, isPartial: false }, plainTheme, {}), 1000);
-        assert.match(rendered, /^Scout · #1 · (?:example\/)?model · low · Started \(inactive\)\n/);
+        assert.match(rendered, /^Scout · (?:example\/)?model · low · Started \(inactive\)$/);
         assert.doesNotMatch(rendered, /Collect with|Usage:|Cleanup:/);
-        assert.ok(rendered.includes(saved.details.taskPreview));
+        assert.ok(!rendered.includes(saved.details.taskPreview));
         assert.doesNotMatch(rendered, /unrelated fallback/);
-        assert.equal(rendered.split("#1").length - 1, 1);
+        assert.doesNotMatch(rendered, /#1|Collect with/);
       }
     };
     renderSaved();
@@ -1071,7 +1124,7 @@ test("background start saves a bounded safe task preview for history without cha
   });
 });
 
-test("background start preserves original task spacing in both views with a safe bounded history fallback", async () => {
+test("background start abbreviates collapsed tasks and preserves expanded spacing throughout collection and history", async () => {
   await withBackgroundFixture("delayed-clean", async ({ tool }) => {
     const task = "Inspect  source\tfiles\x1b[31m\u202e\x1b[0m\n\n" +
       Array.from({ length: 12 }, (_, i) => `Line ${i}:  ${"😀".repeat(30)}`).join("\n");
@@ -1086,22 +1139,26 @@ test("background start preserves original task spacing in both views with a safe
       const running = tool.renderResult(result, { expanded, isPartial: false }, plainTheme,
         { toolCallId: "uncompressed", args });
       // Text expands tabs for terminal display; renderer input itself must preserve them.
-      assert.ok(running.text.includes(`\n\n${safeTask}`));
+      assert.equal(tool.renderCall(args, plainTheme, { expanded }).text, `Delegate · Scout · Start\n${expanded ? safeTask : compactDisplayText(task, 240)}\n`);
       assert.doesNotMatch(running.text, /\x1b|\u202e|preview truncated|more lines/);
       for (const savedArgs of [args, undefined]) {
         const inactive = history.renderResult(result, { expanded, isPartial: false }, plainTheme, { args: savedArgs });
-        assert.equal(inactive.text, `Scout · #1 · ${expanded ? "example/model" : "model"} · low · Started (inactive)\n\n${savedArgs ? safeTask : result.details.taskPreview}`);
+        assert.equal(inactive.text, `Scout · ${expanded ? "example/model" : "model"} · low · Started (inactive)`);
         assert.doesNotMatch(inactive.text, /Running|Collect with|preview truncated|more lines/);
       }
       const fallback = tool.renderResult(result, { expanded, isPartial: false }, plainTheme, { toolCallId: "uncompressed" });
-      assert.ok(fallback.text.includes(`\n\n${result.details.taskPreview}`));
+      assert.doesNotMatch(fallback.text, /Inspect|Collect with/);
       assert.ok(!fallback.text.includes("Line 11:"));
     }
     await waitBackground(tool, result.details.runId);
     const terminal = card.draw();
-    assert.match(terminal.collapsed, /^Scout · #1 · Completed · /);
-    assert.equal(terminal.expanded, terminal.collapsed);
-    assert.doesNotMatch(terminal.collapsed, /Inspect|Line 11|Collect with/);
+    assert.match(terminal.collapsed, /^Scout · model · low · Completed · /);
+    for (const expanded of [false, true]) {
+      const collected = tool.renderResult(result, { expanded, isPartial: false }, plainTheme,
+        { toolCallId: "uncompressed", args, state: card.state });
+      assert.doesNotMatch(collected.text, /Inspect|delayed result|Collect with/);
+    }
+    assert.doesNotMatch(terminal.expanded, /Collect with/);
   });
 });
 
@@ -1129,19 +1186,18 @@ test("background success usage is collected once and foreground remains availabl
     assert.equal(result.details.agent, "scout");
     assert.equal(result.details.backgroundStatus, "completed");
     const call = renderText(tool.renderCall({ action: "wait", runId }, plainTheme, {}));
-    assert.equal(call, "Delegate · Wait");
+    assert.equal(call, `Delegate · Wait · ${runId}\n`);
     for (const expanded of [false, true]) {
       const rendered = renderText(tool.renderResult(result, { expanded, isPartial: false }, plainTheme, {}));
-      assert.equal(renderText(tool.renderCall({ action: "wait", runId }, plainTheme, { expanded })), "Delegate · Wait");
-      assert.equal((call + rendered).split("#1").length - 1, 1);
+      assert.equal(renderText(tool.renderCall({ action: "wait", runId }, plainTheme, { expanded })), `Delegate · Wait · ${runId}\n`);
+      assert.doesNotMatch(rendered, /#1|run-1/);
     }
     const collapsed = renderText(tool.renderResult(result, { expanded: false, isPartial: false }, plainTheme, {}));
-    assert.match(collapsed, /^Scout · #1 · \d+(?:\.\d+)?(?:ms|s)\nReview complete$/);
-    assert.doesNotMatch(collapsed, /example\/model|\blow\b|Usage:|Cleanup:|run-1/);
+    assert.match(collapsed, /^Scout · model · low · \d+(?:\.\d+)?(?:ms|s) · Completed\nReview complete$/);
+    assert.doesNotMatch(collapsed, /Usage:|Cleanup:|run-1|#1/);
     const expanded = renderText(tool.renderResult(result, { expanded: true, isPartial: false }, plainTheme, {}));
     assert.match(expanded, /example\/model · low · /);
-    assert.match(expanded, /Usage: 8 in · 9 out · \$0\.0300/);
-    assert.match(expanded, /Cleanup: verified(?: · forced)? · exit /);
+    assert.doesNotMatch(expanded, /Usage:|Cleanup:/);
     assert.doesNotMatch(expanded, /run-1/);
     assert.equal(result.usage.input, 8);
     assert.equal(result.usage.output, 9);
@@ -1189,18 +1245,17 @@ test("waiting failure throws a Pi error and bills collected usage exactly once",
       assert.equal(content[0].text, failureText, "rendering preserves model-facing diagnostics");
       assert.ok(rendered.endsWith(failureText.slice("Scout · #1 · ".length)));
       const call = renderText(tool.renderCall({ action: "wait", runId }, plainTheme, { expanded }));
-      assert.equal(call, "Delegate · Wait");
-      assert.equal((call + rendered).split("#1").length - 1, 1);
+      assert.equal(call, `Delegate · Wait · ${runId}\n`);
+      assert.doesNotMatch(rendered, /#1/);
       const unprefixed = renderText(tool.renderResult({ content: [{ type: "text", text: "Original Scout · #1 · diagnostic" }], details: patch.details },
         { expanded, isPartial: false }, plainTheme, {}));
       assert.ok(unprefixed.endsWith("Original Scout · #1 · diagnostic"), "only the generated leading prefix is stripped");
-      assert.match(rendered, /^Scout · #1 · Failed\n/);
+      assert.match(rendered, /^Scout · (?:example\/)?model · low · .* · Failed\n/);
       assert.match(rendered, /fixture model error/);
       assert.doesNotMatch(rendered, /run-1/);
       if (expanded) {
         assert.match(rendered, /example\/model · low/);
-        assert.match(rendered, /Usage: 3 in · 2 out · \$0\.0100/);
-        assert.match(rendered, /Cleanup:/);
+        assert.doesNotMatch(rendered, /Usage:|Cleanup:/);
       }
     }
     assert.equal(await toolResult({ toolName: "delegate", toolCallId: "failed-wait" }), undefined);
@@ -1224,11 +1279,8 @@ for (const hasUI of [false, true]) {
       const savedMessage = JSON.parse(JSON.stringify(message));
       for (const expanded of [false, true]) {
         const rendered = renderText(renderer(savedMessage, { expanded }, plainTheme));
-        assert.match(rendered, /^Scout · #1 · Failed\n/);
-        assert.match(rendered, /\[child_error\] fixture model error/);
-        if (expanded) assert.match(rendered, /While the session is active, Collect with delegate\(\{action: "wait", runId: "run-1"\}\)/);
-        else assert.equal(rendered, "Scout · #1 · Failed\n[child_error] fixture model error");
-        assert.equal(rendered.split("#1").length - 1, 1, "custom failure badge appears only in the header");
+        assert.equal(rendered, "Scout · run-1 · Failed\n[child_error] fixture model error");
+        assert.doesNotMatch(rendered, /Collect with|#1/);
       }
       assert.match(message.content, /fixture model error/);
       assert.deepEqual(options, { triggerTurn: false });
@@ -1255,16 +1307,16 @@ test("custom failure renderer uses saved profile details after collection and na
       for (const expanded of [false, true]) {
         // Rendering must rely on persisted details, not message text or a live run.
         const rendered = renderText(renderer({ ...saved, content: "unrelated fallback content" }, { expanded }, plainTheme));
-        assert.match(rendered, /^Code Auditor · #1 · Failed\n/);
-        assert.match(rendered, /\[child_error\] fixture model error/);
-        if (expanded) assert.match(rendered, /Collect with delegate\(\{action: "wait", runId: "run-1"\}\)/);
-        else assert.equal(rendered, "Code Auditor · #1 · Failed\n[child_error] fixture model error");
-        assert.equal(rendered.split("#1").length - 1, 1);
+        assert.equal(rendered, "Code Auditor · run-1 · Failed\n[child_error] fixture model error");
+        assert.doesNotMatch(rendered, /Collect with|#1/);
         assert.doesNotMatch(rendered, /unrelated fallback content/);
       }
     };
     renderSaved();
+    const retained = renderer(saved, { expanded: true }, plainTheme);
+    assert.doesNotMatch(renderText(retained), /Collect with/);
     await assert.rejects(waitBackground(tool, runId), /\[child_error\]/);
+    assert.doesNotMatch(renderText(retained), /Collect with/);
     renderSaved();
     await session.eventHandlers.get("session_before_switch")({}, context(process.cwd()));
     renderSaved();
@@ -1342,13 +1394,13 @@ test("static starts redraw only on settlement while parallel active and silent w
       for (const [i, card] of cards.entries()) {
         for (const expanded of [false, true]) {
           const text = card.frames[0][expanded ? "expanded" : "collapsed"];
-          assert.match(text.split("\n")[0], new RegExp(`^${i === 0 ? "Code Auditor" : "Tester"} · #${i + 1} · ${expanded ? "provider/" : ""}live-${i} · ${starts[i].details.thinking} · Started$`));
-          assert.ok(text.includes(`\n\n${starts[i].details.taskPreview}`));
+          assert.match(text.split("\n")[0], new RegExp(`^${i === 0 ? "Code Auditor" : "Tester"} · ${expanded ? "provider/" : ""}live-${i} · ${starts[i].details.thinking} · Started$`));
+          assert.ok(!text.includes(starts[i].details.taskPreview));
           assert.doesNotMatch(text, /Running|Usage:|Latest commentary|Recent tool starts|No tool starts yet/);
         }
       }
       const mismatch = liveStartCard(tool, starts[0], "unrelated-call");
-      assert.match(mismatch.frames[0].collapsed, /^Code Auditor · #1 · live-0 · minimal · Started \(inactive\)\n/);
+      assert.match(mismatch.frames[0].collapsed, /^Code Auditor · live-0 · minimal · Started \(inactive\)$/);
       assert.doesNotMatch(mismatch.frames[0].expanded, /Collect with|Usage:|Running/);
       assert.equal(created(), 0, "mismatched history cannot observe a same-ID run");
       const updates = [[], []];
@@ -1364,7 +1416,7 @@ test("static starts redraw only on settlement while parallel active and silent w
       const results = await Promise.all(waits);
       assert.equal(active.size, 0, "settlement clears registry heartbeats before collection returns");
       for (const [i, card] of cards.entries()) {
-        assert.equal(card.frames.length, 2, "one settlement redraw, no progress redraws");
+        assert.equal(card.frames.length, 2, "only settlement redraws, no progress or collection redraws");
         const running = updates[i].map((update) => ({
           update,
           collapsed: renderText(tool.renderResult(update, { expanded: false, isPartial: true }, plainTheme, {})),
@@ -1391,8 +1443,7 @@ test("static starts redraw only on settlement while parallel active and silent w
                 durationMs: Number(elapsed) * (unit === "s" ? 1_000 : 1),
                 expandedProgress: renderProgress(progress, true) },
             }, { expanded, isPartial: true }, plainTheme, {}));
-            const aligned = text.replace(` · #${i + 1}`, "");
-            assert.equal(aligned, foreground, "wait header/activity exactly match foreground except badge");
+            assert.equal(text, foreground, "pending wait exactly matches foreground");
           }
         }
         assert.notEqual(running[0].collapsed.split("\n")[0], running[1].collapsed.split("\n")[0], "elapsed advances");
@@ -1408,13 +1459,14 @@ test("static starts redraw only on settlement while parallel active and silent w
         }
         const terminal = card.frames.at(-1);
         assert.match(terminal.collapsed, / · Completed · \d+(?:\.\d+)?(?:ms|s)$/);
+        assert.ok(!terminal.collapsed.includes(starts[i].details.taskPreview));
         assert.doesNotMatch(terminal.expanded, /complete|Usage:|Latest commentary|Recent tool starts/);
         assert.equal(card.state.summary.status, "Completed");
         assert.equal(results[i].content[0].text, `live-${i} complete`, "answer belongs only to collection");
         assert.ok(updates[i].every((update) => update.details.runId === starts[i].details.runId));
         const afterCollection = card.draw();
         assert.equal(afterCollection.collapsed, terminal.collapsed, "per-card summary survives registry removal");
-        assert.equal(afterCollection.expanded, terminal.collapsed, "collected start has no collection instruction");
+        assert.equal(afterCollection.expanded, terminal.expanded, "collected start stays unchanged");
       }
       const counts = cards.map((card) => card.frames.length);
       const updateCounts = updates.map((list) => list.length);
@@ -1439,7 +1491,8 @@ for (const throwing of [false, true]) {
         assert.equal(card.frames.length, throwing ? 1 : 2, "one settlement invalidation attempt");
         assert.equal(active.size, 0);
         const failed = card.draw();
-        assert.match(failed.collapsed, /^Scout · #1 · Failed · \d+(?:\.\d+)?(?:ms|s)$/);
+        assert.match(failed.collapsed, /^Scout · model · low · Failed · \d+(?:\.\d+)?(?:ms|s)$/);
+        assert.doesNotMatch(failed.expanded, /Collect with/);
         assert.doesNotMatch(failed.expanded, /fixture model error|Usage:|Cleanup:/);
         assert.equal(card.state.summary.status, "Failed");
         assert.match(session.messages[0].message.content, /fixture model error/);
@@ -1450,8 +1503,8 @@ for (const throwing of [false, true]) {
         const diagnostics = renderText(tool.renderResult({ content: [{ type: "text", text: "fixture model error" }], details: patch.details },
           { expanded: true, isPartial: false }, plainTheme, {}));
         assert.match(diagnostics, /fixture model error/);
-        assert.match(diagnostics, /Cleanup:/);
-        assert.equal(card.draw().expanded, failed.collapsed, "only compact failure summary survives collection");
+        assert.doesNotMatch(diagnostics, /Cleanup:/);
+        assert.equal(card.draw().expanded, failed.expanded, "failure summary stays unchanged on collection");
         const count = card.frames.length;
         await delay(1_100);
         assert.equal(card.frames.length, count);
@@ -1482,7 +1535,7 @@ for (const event of ["session_before_switch", "session_before_fork", "session_be
         await delay(1_100);
         assert.equal(card.frames.length, count, "navigation/shutdown cannot invalidate removed cards");
         assert.equal(updates.length, updateCount, "navigation/shutdown stops wait updates");
-        assert.match(card.frames.at(-1).collapsed, /^Scout · #1 · model · low · Started \(inactive\)\n/, "closure automatically redraws retained cards even if navigation is cancelled");
+        assert.match(card.frames.at(-1).collapsed, /^Scout · model · low · Started \(inactive\)$/,  "closure automatically redraws retained cards even if navigation is cancelled");
         assert.doesNotMatch(card.frames.at(-1).expanded, /Collect with|Running/);
         assert.deepEqual(session.messages, []);
       });
@@ -1506,8 +1559,8 @@ test("pending silent waits publish immediate elapsed progress and one-second hea
         assert.ok(list[0].details.durationMs >= 1_100, "elapsed includes time before admission");
         assert.equal(list[0].content[0].text, renderProgress({ totalCalls: 0, recentTools: [] }));
         const rendered = renderText(tool.renderResult(list[0], { expanded: false, isPartial: true }, plainTheme, {}));
-        assert.match(rendered, new RegExp(`^${i === 0 ? "Code Auditor" : "Tester"} · #${i + 1} · model-${i} · ${starts[i].details.thinking} · \\d+(?:\\.\\d+)?s · Running\\nNo tool starts yet$`));
-        assert.equal(renderText(tool.renderCall({ action: "wait", runId: starts[i].details.runId }, plainTheme, {})), "Delegate · Wait");
+        assert.match(rendered, new RegExp(`^${i === 0 ? "Code Auditor" : "Tester"} · model-${i} · ${starts[i].details.thinking} · \\d+(?:\\.\\d+)?s · Running\\nNo tool starts yet$`));
+        assert.equal(renderText(tool.renderCall({ action: "wait", runId: starts[i].details.runId }, plainTheme, {})), `Delegate · Wait · ${starts[i].details.runId}\n`);
         const expanded = renderText(tool.renderResult(list[0], { expanded: true, isPartial: true }, plainTheme, {}));
         assert.equal(expanded, rendered.replace(` · model-${i}`, ` · provider/model-${i}`), "silent expanded wait uses full model");
       }
@@ -1543,9 +1596,9 @@ test("wait observers tolerate errors and invalid waits add no timers", async () 
       await assert.rejects(tool.execute("unknown", { action: "wait", runId: "run-999" }, undefined, observer, context(process.cwd())), /Unknown/);
       assert.equal(created(), 1, "invalid waits add no timers");
       controller.abort();
-      await assert.rejects(wait, /wait cancelled.*session-owned/);
+      await assert.rejects(wait, /Stopped waiting for delegate run-1; delegate not cancelled\. Wait again to get the result\./);
       assert.equal(active.size, 0);
-      await assert.rejects(tool.execute("already-aborted", { action: "wait", runId: id }, controller.signal, observer, context(process.cwd())), /wait cancelled/);
+      await assert.rejects(tool.execute("already-aborted", { action: "wait", runId: id }, controller.signal, observer, context(process.cwd())), /Stopped waiting for delegate/);
       assert.equal(created(), 1, "already-aborted wait adds no timer");
       assert.equal((await waitBackground(tool, id)).content[0].text, "delayed result");
       assert.equal(created(), 1, "no observer means no additional timer");
@@ -1587,7 +1640,7 @@ test("cancelling and retrying observed waits retains the start settlement observ
       assert.equal(first.length, 1);
       assert.equal(active.size, 1);
       controller.abort();
-      await assert.rejects(waiting, /wait cancelled.*session-owned/);
+      await assert.rejects(waiting, /Stopped waiting for delegate run-1; delegate not cancelled\. Wait again to get the result\./);
       assert.equal(active.size, 0);
       assert.equal(card.frames.length, 1, "cancelling wait does not redraw or remove start observation");
       const retry = [];
@@ -1598,7 +1651,7 @@ test("cancelling and retrying observed waits retains the start settlement observ
       assert.equal(active.size, 0);
       assert.ok(retry.length >= 3);
       assert.equal(first.length, 1, "cancelled subscription receives no later progress");
-      assert.equal(card.frames.length, 2, "retained start observation receives settlement exactly once");
+      assert.equal(card.frames.length, 2, "retained start receives only settlement invalidation");
       assert.match(card.frames.at(-1).collapsed, / · Completed · /);
       const count = retry.length;
       await delay(1_100);
@@ -1615,7 +1668,7 @@ test("cancelling wait leaves the real background child available for later colle
     const controller = new AbortController();
     const waiting = waitBackground(tool, runId, "cancelled-wait", controller.signal);
     controller.abort();
-    await assert.rejects(waiting, /wait cancelled.*session-owned/);
+    await assert.rejects(waiting, /Stopped waiting for delegate run-1; delegate not cancelled\. Wait again to get the result\./);
     assert.equal((await waitBackground(tool, runId, "retry-wait")).content[0].text, "delayed result");
     assert.deepEqual(session.messages, []);
     const toolResult = session.eventHandlers.get("tool_result");

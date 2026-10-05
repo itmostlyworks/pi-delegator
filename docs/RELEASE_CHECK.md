@@ -18,6 +18,16 @@ The live scout and worker checks used `openai-codex/gpt-6-astra`. Their profiles
 
 Linux was not rerun in this recorded verification. Deliberate session escape and abrupt parent death are outside the containment guarantee.
 
+## Async presentation refinements (current branch)
+
+Automated checks on Linux, without provider calls:
+
+- `npm run typecheck` — exit 0.
+- `npm test` — exit 0; 169 passed.
+- `git diff --check` — exit 0.
+
+Coverage includes foreground-style async call/result formatting and raw newline spacing (including the wait call/result gap), task previews/full expanded tasks retained in start calls, no human-card retrieval instructions or extra usage/cleanup sections, historical identity protection, and retryable wait cancellation wording. Live Pi TUI wrapping, scroll stability, and visual emphasis remain unverified.
+
 ## Reproduce
 
 Use the [smoke-test guide](SMOKE_TEST.md). Automated checks and coverage expectations are in the [testing guide](IMPLEMENTATION.md).
