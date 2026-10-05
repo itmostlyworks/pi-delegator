@@ -1024,6 +1024,70 @@ async function startBackground(tool, signal) {
 const waitBackground = (tool, runId, id = "wait", signal) => tool.execute(id,
   { action: "wait", runId }, signal, undefined, context(process.cwd()));
 
+test("footer counts parallel foreground/background runs but not waits, and clears on settlement", async () => {
+  await withBackgroundFixture("delayed-clean", async ({ tool }) => {
+    const values = [];
+    const ctx = { ...context(process.cwd()), mode: "tui", ui: { theme: plainTheme, setStatus: (key, text) => {
+      assert.equal(key, "pi-delegator");
+      values.push(text);
+    } } };
+    const foreground = tool.execute("footer-foreground", { agent: "worker", task: "Inspect" }, undefined, undefined, ctx);
+    const starts = await Promise.all(["worker", "scout", "tester", "tester"].map((agent, i) =>
+      tool.execute(`footer-start-${i}`, { action: "start", agent, task: "Inspect" }, undefined, undefined, ctx)));
+    assert.equal(values.at(-1), "delegates: worker ×2 · scout · +2");
+    const count = values.length;
+    const controller = new AbortController();
+    const waiting = tool.execute("footer-wait", { action: "wait", runId: starts[0].details.runId }, controller.signal, undefined, ctx);
+    controller.abort();
+    await assert.rejects(waiting, /Stopped waiting/);
+    assert.equal(values.length, count, "wait cancellation must not change active counts");
+    await assert.rejects(tool.execute("invalid", { agent: "scout", task: " " }, undefined, undefined, ctx), /blank/);
+    const aborted = new AbortController();
+    aborted.abort();
+    await assert.rejects(tool.execute("aborted", { action: "start", agent: "scout", task: "Inspect" }, aborted.signal, undefined, ctx), /cancelled/);
+    assert.equal(values.length, count, "rejections must not publish phantom runs");
+    await foreground;
+    await eventually(() => values.at(-1) === undefined);
+    const settledCount = values.length;
+    for (const start of starts) await waitBackground(tool, start.details.runId);
+    assert.equal(values.length, settledCount, "settled uncollected runs and collection are not active");
+  }, { FAKE_PI_DELAY_MS: "500" });
+});
+
+test("footer old foreground completion cannot overwrite a new session", async () => {
+  await withBackgroundFixture("delayed-clean", async ({ tool, session }) => {
+    const values = [];
+    const ctx = { ...context(process.cwd()), mode: "tui", ui: { theme: plainTheme, setStatus: (_key, text) => values.push(text) } };
+    const controller = new AbortController();
+    const oldRun = tool.execute("old-footer", { agent: "worker", task: "Inspect" }, controller.signal, undefined, ctx);
+    const rejected = assert.rejects(oldRun, /cancelled/);
+    await eventually(() => values.at(-1) === "delegates: worker");
+    await session.eventHandlers.get("session_start")({}, ctx);
+    const started = await session.tool.execute("new-footer", { action: "start", agent: "scout", task: "Inspect" }, undefined, undefined, ctx);
+    assert.equal(values.at(-1), "delegates: scout");
+    const count = values.length;
+    controller.abort();
+    await rejected;
+    assert.equal(values.length, count, "old runner finally must not publish to the new session");
+    await waitBackground(session.tool, started.details.runId);
+    assert.equal(values.at(-1), undefined);
+  }, { FAKE_PI_DELAY_MS: "1000" });
+});
+
+for (const scenario of ["assistant-error", "oversized-assistant"]) {
+  test(`footer clears after ${scenario} failure even when UI throws`, async () => {
+    await withBackgroundFixture(scenario, async ({ tool }) => {
+      const values = [];
+      const ctx = { ...context(process.cwd()), mode: "tui", ui: { theme: plainTheme, setStatus(_key, text) {
+        values.push(text);
+        throw new Error("footer unavailable");
+      } } };
+      await assert.rejects(tool.execute("footer-failure", { agent: "scout", task: "Inspect" }, undefined, undefined, ctx));
+      assert.deepEqual(values, ["delegates: scout", undefined]);
+    });
+  });
+}
+
 test("background is opt-in and the default closed schema is unchanged", async () => {
   const implicit = registeredTool();
   const disabled = registeredTool({ background: false });
@@ -1679,7 +1743,11 @@ test("cancelling wait leaves the real background child available for later colle
 for (const event of ["session_shutdown", "session_before_switch", "session_before_fork", "session_before_tree"]) {
   test(`${event} aborts background children and cleans TERM-resistant descendants`, { timeout: 12_000 }, async () => {
     await withBackgroundFixture("term-resistant-descendant", async ({ tool, session, directory }) => {
-      const runId = await startBackground(tool);
+      const values = [];
+      const ctx = { ...context(process.cwd()), mode: "tui", ui: { theme: plainTheme, setStatus: (_key, value) => values.push(value) } };
+      const start = await tool.execute("navigation-start", { action: "start", agent: "scout", task: "Inspect" }, undefined, undefined, ctx);
+      const runId = start.details.runId;
+      assert.equal(values.at(-1), "delegates: scout");
       const pidPath = join(directory, "descendant.pid");
       await fileAppears(pidPath);
       const pid = Number(await readFile(pidPath, "utf8"));
@@ -1688,6 +1756,7 @@ for (const event of ["session_shutdown", "session_before_switch", "session_befor
       const before = Date.now();
       await session.eventHandlers.get(event)({}, context(process.cwd()));
       assert.ok(Date.now() - before < 8_000, "session cleanup must be bounded");
+      assert.equal(values.at(-1), undefined, "cleanup clears the active delegate footer");
       assert.match(await readFile(join(directory, "signals"), "utf8"), /SIGTERM/);
       let status = "";
       try { status = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8", timeout: 1000 }).trim(); }
@@ -1701,10 +1770,13 @@ for (const event of ["session_shutdown", "session_before_switch", "session_befor
       } else {
         // Another extension may cancel navigation: no session_start follows the pre-event.
         process.env.FAKE_PI_SCENARIO = "clean";
-        const replacement = await startBackground(tool);
+        const restarted = await tool.execute("navigation-restart", { action: "start", agent: "scout", task: "Inspect" }, undefined, undefined, ctx);
+        const replacement = restarted.details.runId;
+        assert.equal(values.at(-1), "delegates: scout", "cancelled navigation keeps status usable");
         assert.equal(runId, "run-1");
         assert.equal(replacement, "run-2");
         assert.equal((await waitBackground(tool, replacement)).content[0].text, "Scout result");
+        assert.equal(values.at(-1), undefined);
       }
       assert.deepEqual(session.messages, []);
     });

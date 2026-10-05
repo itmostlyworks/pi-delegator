@@ -22,6 +22,7 @@ import {
 } from "./config.ts";
 import type { UsageSummary } from "./protocol.ts";
 import { BackgroundRuns } from "./background.ts";
+import { DelegateStatus } from "./status.ts";
 import {
   runDelegate,
   type CleanupDetails,
@@ -270,6 +271,7 @@ function registerDelegateTool(
   recordFailedUsage: (toolCallId: string, usage: Usage, details?: DelegateDetails) => void,
   background: boolean,
   runs: BackgroundRuns<BackgroundOutcome, BackgroundMetadata>,
+  status: DelegateStatus,
 ): void {
   const DelegateParameters = createDelegateParameters(profiles, background);
   const profileSummary = Object.values(profiles)
@@ -371,6 +373,7 @@ function registerDelegateTool(
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
         };
         const runId = runs.start(async (ownedSignal): Promise<BackgroundOutcome> => {
+          const finishStatus = ownedSignal.aborted ? () => {} : status.begin(profile.name, ctx);
           try {
             const result = await runDelegate({
               profile, task, cwd,
@@ -384,6 +387,8 @@ function registerDelegateTool(
             return { result, profile, model };
           } catch (error) {
             return { error: error instanceof Error ? error.message : String(error), profile, model };
+          } finally {
+            finishStatus();
           }
         }, metadata);
         return {
@@ -423,6 +428,7 @@ function registerDelegateTool(
       };
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let result: Awaited<ReturnType<typeof runDelegate>>;
+      const finishStatus = signal?.aborted ? () => {} : status.begin(profile.name, ctx);
       try {
         if (onUpdate !== undefined) {
           publishUpdate();
@@ -447,6 +453,7 @@ function registerDelegateTool(
         });
       } finally {
         if (heartbeat !== undefined) clearInterval(heartbeat);
+        finishStatus();
       }
 
       if (!result.ok) {
@@ -524,6 +531,7 @@ function registerDelegateTool(
 export default function piDelegator(pi: ExtensionAPI): void {
   const userConfig = loadDelegateConfig();
   let runs: BackgroundRuns<BackgroundOutcome, BackgroundMetadata> | undefined;
+  let status: DelegateStatus | undefined;
   const failedUsageByToolCallId = new Map<string, { usage: Usage; details?: DelegateDetails }>();
 
   pi.registerMessageRenderer<BackgroundFailureDetails>("pi-delegator-failure", (message, { expanded }, theme) => {
@@ -545,7 +553,9 @@ export default function piDelegator(pi: ExtensionAPI): void {
   });
 
   const closeRuns = async () => {
+    const closingStatus = status;
     await runs?.close();
+    closingStatus?.dispose();
     failedUsageByToolCallId.clear();
   };
   pi.on("session_shutdown", closeRuns);
@@ -555,7 +565,9 @@ export default function piDelegator(pi: ExtensionAPI): void {
   pi.on("session_before_tree", cancelRuns);
 
   pi.on("session_start", async (_event, ctx) => {
+    status?.dispose();
     if (runs !== undefined) await runs.close();
+    status = new DelegateStatus(ctx);
     const config = ctx.isProjectTrusted()
       ? loadDelegateConfig(getProjectDelegateConfigPath(ctx.cwd), userConfig)
       : userConfig;
@@ -583,6 +595,6 @@ export default function piDelegator(pi: ExtensionAPI): void {
     );
     registerDelegateTool(pi, config.profiles, (toolCallId, usage, details) => {
       failedUsageByToolCallId.set(toolCallId, { usage, ...(details === undefined ? {} : { details }) });
-    }, config.background, runs);
+    }, config.background, runs, status);
   });
 }

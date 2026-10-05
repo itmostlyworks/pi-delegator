@@ -39,6 +39,10 @@ Background runs reuse foreground cards. Foreground presentation is unchanged.
 - Human cards contain no collection instructions or extra usage/cleanup rows. Model-facing start returns retain retrieval instructions. Uncollected failure notifications identify the run for linkage.
 - Historical starts cannot bind to another tool call's reused run ID. Without matching live state or a retained terminal summary they show Started (inactive).
 
+### Active delegate status
+
+The interactive footer shows active foreground and background runs using profile identifiers: `delegates: scout · worker ×2`. Duplicate profiles are grouped; at most two distinct names appear, followed by `+N` additional runs. Names are terminal-safe and bounded. Waits do not count separately, and settled uncollected runs are excluded. The status clears when no runs are active and on session replacement. Updates occur on launch and settlement, without polling or animation; display failures cannot affect execution or cleanup.
+
 ## Bundled profiles
 
 All bundled profiles inherit the parent's model and have no run deadline.

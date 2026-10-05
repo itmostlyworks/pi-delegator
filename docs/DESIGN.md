@@ -25,6 +25,7 @@ fixtures and lifecycle coverage; observed results live in [RELEASE_CHECK.md](REL
 | `src/delegate-bash-extension.ts` | Private child Bash override with job isolation, handshake, timeout recovery, and bounded drainage. |
 | `src/delegate-child-contract.ts` | Private child environment marker and reserved lifecycle exit codes. |
 | `src/display.ts` | Terminal-safe compact previews and observational tool/activity summaries. |
+| `src/status.ts` | Session-local, event-driven active delegate footer counts; no lifecycle ownership. |
 | `src/bash-classification.ts` | Conservative Bash activity labels without rendering raw command arguments. |
 
 ## Session-owned background execution

@@ -43,6 +43,8 @@ delegate({
 
 By default, delegates use the parent's model and working directory and run in the foreground. Independent calls can run concurrently. Pi shows progress, then the returned answer; delegate token usage and cost count toward the parent session's totals.
 
+The interactive footer shows active delegates compactly, for example `delegates: scout · worker ×2`. It shows at most two profile names, then `+N` additional runs, and disappears when all runs finish. Background runs are included; waiting does not count a run twice.
+
 ### Opt-in background runs
 
 Add this to `~/.pi/agent/pi-delegator.json` or a trusted project's `.pi/pi-delegator.json`:

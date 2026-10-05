@@ -28,6 +28,16 @@ Automated checks on Linux, without provider calls:
 
 Coverage includes foreground-style async call/result formatting and raw newline spacing (including the wait call/result gap), task previews/full expanded tasks retained in start calls, no human-card retrieval instructions or extra usage/cleanup sections, historical identity protection, and retryable wait cancellation wording. Live Pi TUI wrapping, scroll stability, and visual emphasis remain unverified.
 
+## Active delegate footer (current branch)
+
+Automated checks on Linux, without provider calls:
+
+- `npm run typecheck` — exit 0.
+- `npm test` — exit 0; 181 passed.
+- `git diff --check` — exit 0.
+
+Coverage includes grouped parallel foreground/background counts, overflow run counts, wait cancellation without double-counting, settlement and failure cleanup, navigation/shutdown cleanup and cancelled-navigation reuse, stale-session isolation, terminal-safe labels, the built-in footer's `dim` theme color, non-TUI modes, and throwing UI observers. Live Pi footer rendering remains unverified.
+
 ## Reproduce
 
 Use the [smoke-test guide](SMOKE_TEST.md). Automated checks and coverage expectations are in the [testing guide](IMPLEMENTATION.md).
