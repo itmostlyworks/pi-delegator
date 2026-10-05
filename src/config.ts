@@ -22,6 +22,16 @@ import {
   type DelegateThinkingLevel,
 } from "./agents.ts";
 
+export interface DelegateConfig {
+  readonly profiles: DelegateProfileRegistry;
+  readonly background: boolean;
+}
+
+const DEFAULT_DELEGATE_CONFIG: DelegateConfig = Object.freeze({
+  profiles: BUNDLED_PROFILES,
+  background: false,
+});
+
 export const DELEGATE_CONFIG_FILENAME = "pi-delegator.json";
 export const MAX_CONFIG_BYTES = 16 * 1024;
 export const MAX_MODEL_BYTES = 256;
@@ -345,15 +355,15 @@ function parseProfile(path: string, profileName: string, value: unknown): Delega
   });
 }
 
-export function loadDelegateProfiles(
+export function loadDelegateConfig(
   path = getDelegateConfigPath(),
-  lowerPrecedenceProfiles: DelegateProfileRegistry = BUNDLED_PROFILES,
-): DelegateProfileRegistry {
+  lowerPrecedenceConfig: DelegateConfig = DEFAULT_DELEGATE_CONFIG,
+): DelegateConfig {
   let bytes: Buffer;
   try {
     bytes = readBoundedFile(path, MAX_CONFIG_BYTES);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return lowerPrecedenceProfiles;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return lowerPrecedenceConfig;
     const reason = error instanceof Error ? error.message : String(error);
     throw configError(path, `file could not be read: ${reason}. Corrective action: provide a readable regular JSON file or remove it`);
   }
@@ -366,22 +376,38 @@ export function loadDelegateProfiles(
     throw configError(path, "top level must be an object. Corrective action: use {\"profiles\":{...}}");
   }
   const rootFields = Object.keys(parsed);
-  if (!Object.hasOwn(parsed, "profiles")) {
+  if (!Object.hasOwn(parsed, "profiles") && !Object.hasOwn(parsed, "background")) {
     throw configError(path, "legacy or incomplete format detected. Corrective action: replace it with {\"profiles\":{\"name\":null or a complete profile definition}}");
   }
-  if (rootFields.length !== 1) {
-    const unexpected = rootFields.filter((field) => field !== "profiles");
-    throw configError(path, `unknown top-level field(s) ${unexpected.map((field) => JSON.stringify(field)).join(", ")}. Corrective action: keep only the "profiles" map`);
+  const unexpected = rootFields.filter((field) => field !== "profiles" && field !== "background");
+  if (unexpected.length > 0) {
+    throw configError(path, `unknown top-level field(s) ${unexpected.map((field) => JSON.stringify(field)).join(", ")}. Corrective action: keep only the "profiles" map and optional "background" boolean`);
   }
-  if (!isRecord(parsed.profiles)) {
+  if (Object.hasOwn(parsed, "background") && typeof parsed.background !== "boolean") {
+    throw configError(path, '"background" must be a boolean. Corrective action: use true or false, or omit it to inherit the lower-precedence setting');
+  }
+  const profiles = Object.hasOwn(parsed, "profiles") ? parsed.profiles : {};
+  if (!isRecord(profiles)) {
     throw configError(path, '"profiles" must be an object. Corrective action: map each profile name to null or a complete profile definition');
   }
 
-  const effective: Record<string, DelegateProfile> = { ...lowerPrecedenceProfiles };
-  for (const [profileName, value] of Object.entries(parsed.profiles)) {
+  const effective: Record<string, DelegateProfile> = { ...lowerPrecedenceConfig.profiles };
+  for (const [profileName, value] of Object.entries(profiles)) {
     validateProfileName(path, profileName);
     if (value === null) delete effective[profileName];
     else effective[profileName] = parseProfile(path, profileName, value);
   }
-  return Object.freeze(effective);
+  return Object.freeze({
+    profiles: Object.freeze(effective),
+    background: Object.hasOwn(parsed, "background")
+      ? parsed.background as boolean
+      : lowerPrecedenceConfig.background,
+  });
+}
+
+export function loadDelegateProfiles(
+  path = getDelegateConfigPath(),
+  lowerPrecedenceProfiles: DelegateProfileRegistry = BUNDLED_PROFILES,
+): DelegateProfileRegistry {
+  return loadDelegateConfig(path, { profiles: lowerPrecedenceProfiles, background: false }).profiles;
 }

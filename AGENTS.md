@@ -53,7 +53,6 @@ Locate `docs/extensions.md` and `examples/extensions/subagent/` in the installed
 
 Do not add:
 
-- async/background runs
 - resume or fork
 - chains or a workflow DSL
 - missions or schedules

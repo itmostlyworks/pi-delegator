@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +14,7 @@ import {
   WORKER_PROFILE,
 } from "../src/agents.ts";
 import { DELEGATE_CONFIG_FILENAME } from "../src/config.ts";
+import { renderProgress, terminalSafe } from "../src/display.ts";
 import piDelegator, { MAX_MODEL_BYTES, MAX_TASK_BYTES } from "../src/index.ts";
 
 function registeredTool(config, session = {}) {
@@ -30,13 +32,22 @@ function registeredTool(config, session = {}) {
       registerTool(definition) {
         tool = definition;
       },
+      registerMessageRenderer(customType, renderer) {
+        (session.messageRenderers ??= new Map()).set(customType, renderer);
+      },
+      sendMessage(message, options) {
+        session.messages?.push({ message, options });
+      },
       on(eventName, handler) {
         session.eventHandlers?.set(eventName, handler);
         if (eventName === "session_start") sessionStart = handler;
       },
     });
     assert.ok(sessionStart);
-    sessionStart({}, context(session.cwd ?? agentDirectory, session.trusted ?? false));
+    session.ready = Promise.resolve(sessionStart({}, {
+      ...context(session.cwd ?? agentDirectory, session.trusted ?? false),
+      hasUI: session.hasUI ?? false,
+    }));
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -889,3 +900,760 @@ test("heartbeat stops on child, protocol, spawn, and pre-aborted failures", asyn
     else process.env.PI_DELEGATOR_PI_BINARY = previousBinary;
   }
 });
+
+async function withBackgroundFixture(scenario, run, extraEnv = {}, sessionOptions = {}) {
+  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-background-"));
+  const env = {
+    PI_DELEGATOR_PI_BINARY: resolve("test/fixtures/fake-pi.mjs"),
+    FAKE_PI_SCENARIO: scenario,
+    FAKE_PI_RECORD_PATH: join(directory, "args.json"),
+    FAKE_PI_SIGNAL_PATH: join(directory, "signals"),
+    FAKE_PI_DESCENDANT_PID_PATH: join(directory, "descendant.pid"),
+    ...extraEnv,
+  };
+  const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  const session = { eventHandlers: new Map(), messages: [], hasUI: false, ...sessionOptions };
+  try {
+    Object.assign(process.env, env);
+    const tool = registeredTool(session.config ?? { background: true }, session);
+    await session.ready;
+    await run({ tool, session, directory });
+  } finally {
+    await session.eventHandlers.get("session_shutdown")?.({}, context(process.cwd()));
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function eventually(check, timeoutMs = 5_000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if (await check()) return;
+    await delay(20);
+  }
+  assert.fail("condition did not become true before bounded timeout");
+}
+
+async function fileAppears(path) {
+  await eventually(async () => {
+    try { await readFile(path); return true; }
+    catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  });
+}
+
+async function startBackground(tool, signal) {
+  const result = await tool.execute("start", { action: "start", agent: "scout", task: "Inspect" },
+    signal, undefined, context(process.cwd()));
+  assert.equal(result.usage, undefined, "start must not charge usage before collection");
+  const runId = result.content[0].text.match(/Started background delegate ([\w-]+)/)?.[1];
+  assert.ok(runId);
+  assert.match(runId, /^run-[1-9][0-9]*$/);
+  assert.equal(result.details.runId, runId);
+  assert.equal(result.details.agent, "scout");
+  assert.equal(result.details.backgroundStatus, "started");
+  assert.equal(result.details.taskPreview, "Inspect");
+  assert.equal(result.content[0].text, `Started background delegate ${runId}. Collect with delegate({action: "wait", runId: "${runId}"}).`);
+  for (const expanded of [false, true]) {
+    assert.equal(renderText(tool.renderCall({ action: "start", agent: "scout", task: "Inspect" }, plainTheme, { expanded })), "Delegate · Start");
+    const rendered = renderText(tool.renderResult(result, { expanded, isPartial: false }, plainTheme, {}));
+    const badge = `#${runId.slice(4)}`;
+    assert.equal(rendered, `Scout · ${badge} · ${expanded ? "example/model" : "model"} · low · Started (inactive)\n\nInspect`);
+    assert.doesNotMatch(rendered, /Collect with|Usage:|Cleanup:|Running/);
+    assert.equal(rendered.split(badge).length - 1, 1, "start badge appears only in the header");
+    if (!expanded) assert.ok(!rendered.includes(runId), "collapsed UI should show only the short badge");
+  }
+  return runId;
+}
+
+const waitBackground = (tool, runId, id = "wait", signal) => tool.execute(id,
+  { action: "wait", runId }, signal, undefined, context(process.cwd()));
+
+test("background is opt-in and the default closed schema is unchanged", async () => {
+  const implicit = registeredTool();
+  const disabled = registeredTool({ background: false });
+  assert.deepEqual(disabled.parameters, implicit.parameters);
+  for (const tool of [implicit, disabled]) {
+    assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "task", "model", "cwd"]);
+    await assert.rejects(startBackground(tool), /Background delegation is disabled/);
+  }
+  const enabled = registeredTool({ background: true });
+  assert.equal(enabled.parameters.type, "object", "providers require a root object schema");
+  assert.equal(enabled.parameters.additionalProperties, false);
+  assert.equal(enabled.parameters.anyOf, undefined);
+  assert.deepEqual(Object.keys(enabled.parameters.properties), ["agent", "task", "model", "cwd", "action", "runId"]);
+  assert.deepEqual(enabled.parameters.required ?? [], [], "action-dependent requirements are checked by execute");
+  for (const field of ["agent", "task", "model", "cwd"]) {
+    assert.deepEqual(enabled.parameters.properties[field], implicit.parameters.properties[field]);
+  }
+  assert.deepEqual(enabled.parameters.properties.action.enum, ["run", "start", "wait"]);
+  assert.equal(enabled.parameters.properties.runId.type, "string");
+  assert.equal(enabled.parameters.properties.runId.minLength, 1);
+  assert.equal(enabled.parameters.properties.runId.maxLength, 64);
+});
+
+test("only trusted parent project config may enable or disable background delegation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-background-trust-"));
+  try {
+    await mkdir(join(directory, ".pi"));
+    const configPath = join(directory, ".pi", DELEGATE_CONFIG_FILENAME);
+    await writeFile(configPath, JSON.stringify({ background: true }));
+    const untrusted = registeredTool(undefined, { cwd: directory, trusted: false });
+    assert.equal(untrusted.parameters.properties.action, undefined);
+    const trusted = registeredTool(undefined, { cwd: directory, trusted: true });
+    assert.deepEqual(trusted.parameters.properties.action.enum, ["run", "start", "wait"]);
+    await writeFile(configPath, JSON.stringify({ background: false }));
+    const disabled = registeredTool({ background: true }, { cwd: directory, trusted: true });
+    assert.equal(disabled.parameters.properties.action, undefined);
+    const ignored = registeredTool({ background: true }, { cwd: directory, trusted: false });
+    assert.deepEqual(ignored.parameters.properties.action.enum, ["run", "start", "wait"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("background execute validates action-dependent fields before launching or collecting", async () => {
+  const tool = registeredTool({ background: true });
+  const execute = (params) => tool.execute("invalid", params, undefined, undefined, context(process.cwd()));
+  for (const runId of [undefined, "", "   ", 42, null]) {
+    await assert.rejects(execute({ action: "wait", ...(runId === undefined ? {} : { runId }) }), /wait requires runId/);
+  }
+  for (const [field, value] of Object.entries({ agent: "scout", task: "Inspect", model: "provider/model", cwd: process.cwd() })) {
+    await assert.rejects(execute({ action: "wait", runId: "unknown", [field]: value }), /wait accepts only action and runId/);
+  }
+  await assert.rejects(execute({ action: "wait", runId: "unknown" }), /Unknown or already collected/);
+  for (const action of [undefined, "run", "start"]) {
+    const base = action === undefined ? {} : { action };
+    for (const fields of [{}, { agent: "scout" }, { task: "Inspect" }, { agent: 42, task: "Inspect" }, { agent: "scout", task: null }]) {
+      await assert.rejects(execute({ ...base, ...fields }), /run\/start requires agent and task/);
+    }
+    for (const runId of ["unknown", ""]) {
+      await assert.rejects(execute({ ...base, agent: "scout", task: "Inspect", runId }), /runId is only valid for delegate wait/);
+    }
+  }
+  await assert.rejects(execute({ action: "invalid", agent: "scout", task: "Inspect" }), /Unknown delegate action/);
+});
+
+test("background start saves a bounded safe task preview for history without changing foreground cards", async () => {
+  await withBackgroundFixture("clean", async ({ tool, session }) => {
+    const task = "Inspect\n source\x1b[31m now\x1b[0m\u202e " + "😀".repeat(500);
+    const args = { action: "start", agent: "scout", task };
+    const started = await tool.execute("preview-start", args, undefined, undefined, context(process.cwd()));
+    const saved = JSON.parse(JSON.stringify(started));
+    assert.ok(Array.from(saved.details.taskPreview).length <= 241);
+    assert.doesNotMatch(saved.details.taskPreview, /[\x1b\u202e]/);
+    assert.ok(saved.details.taskPreview.startsWith("Inspect\n source now"));
+    const historyTool = registeredTool();
+    const renderSaved = () => {
+      for (const expanded of [false, true]) {
+        assert.equal(renderText(historyTool.renderCall(args, plainTheme, { expanded })), "Delegate · Start");
+        const rendered = renderText(historyTool.renderResult({ ...saved, content: [{ type: "text", text: "unrelated fallback" }] },
+          { expanded, isPartial: false }, plainTheme, {}), 1000);
+        assert.match(rendered, /^Scout · #1 · (?:example\/)?model · low · Started \(inactive\)\n/);
+        assert.doesNotMatch(rendered, /Collect with|Usage:|Cleanup:/);
+        assert.ok(rendered.includes(saved.details.taskPreview));
+        assert.doesNotMatch(rendered, /unrelated fallback/);
+        assert.equal(rendered.split("#1").length - 1, 1);
+      }
+    };
+    renderSaved();
+    await waitBackground(tool, saved.details.runId);
+    await session.eventHandlers.get("session_before_switch")({}, context(process.cwd()));
+    renderSaved();
+    for (const action of [undefined, "run"]) {
+      for (const expanded of [false, true]) {
+        assert.equal(renderText(tool.renderCall({ agent: "scout", task: "Inspect", ...(action ? { action } : {}) }, plainTheme, { expanded })),
+          "Delegate · Scout\nInspect\n");
+      }
+    }
+  });
+});
+
+test("background start preserves original task spacing in both views with a safe bounded history fallback", async () => {
+  await withBackgroundFixture("delayed-clean", async ({ tool }) => {
+    const task = "Inspect  source\tfiles\x1b[31m\u202e\x1b[0m\n\n" +
+      Array.from({ length: 12 }, (_, i) => `Line ${i}:  ${"😀".repeat(30)}`).join("\n");
+    const args = { action: "start", agent: "scout", task };
+    const result = await tool.execute("uncompressed", args, undefined, undefined, context(process.cwd()));
+    const safeTask = terminalSafe(task);
+    assert.ok(Array.from(safeTask).length > 240);
+    assert.equal(result.details.taskPreview, Array.from(safeTask).slice(0, 240).join("") + "…");
+    const card = liveStartCard(tool, result, "uncompressed", false, args);
+    const history = registeredTool();
+    for (const expanded of [false, true]) {
+      const running = tool.renderResult(result, { expanded, isPartial: false }, plainTheme,
+        { toolCallId: "uncompressed", args });
+      // Text expands tabs for terminal display; renderer input itself must preserve them.
+      assert.ok(running.text.includes(`\n\n${safeTask}`));
+      assert.doesNotMatch(running.text, /\x1b|\u202e|preview truncated|more lines/);
+      for (const savedArgs of [args, undefined]) {
+        const inactive = history.renderResult(result, { expanded, isPartial: false }, plainTheme, { args: savedArgs });
+        assert.equal(inactive.text, `Scout · #1 · ${expanded ? "example/model" : "model"} · low · Started (inactive)\n\n${savedArgs ? safeTask : result.details.taskPreview}`);
+        assert.doesNotMatch(inactive.text, /Running|Collect with|preview truncated|more lines/);
+      }
+      const fallback = tool.renderResult(result, { expanded, isPartial: false }, plainTheme, { toolCallId: "uncompressed" });
+      assert.ok(fallback.text.includes(`\n\n${result.details.taskPreview}`));
+      assert.ok(!fallback.text.includes("Line 11:"));
+    }
+    await waitBackground(tool, result.details.runId);
+    const terminal = card.draw();
+    assert.match(terminal.collapsed, /^Scout · #1 · Completed · /);
+    assert.equal(terminal.expanded, terminal.collapsed);
+    assert.doesNotMatch(terminal.collapsed, /Inspect|Line 11|Collect with/);
+  });
+});
+
+test("background start returns before a real child's delayed completion", async () => {
+  await withBackgroundFixture("delayed-clean", async ({ tool, directory }) => {
+    const before = Date.now();
+    const runId = await startBackground(tool);
+    assert.ok(Date.now() - before < 1_500, "start should not await the 2-second delegate");
+    await fileAppears(join(directory, "args.json"));
+    const args = JSON.parse(await readFile(join(directory, "args.json"), "utf8"));
+    assert.ok(args.includes("--no-session"));
+    assert.ok(args.includes("--no-extensions"));
+    assert.equal((await waitBackground(tool, runId)).content[0].text, "delayed result");
+    await assert.rejects(waitBackground(tool, runId), /Unknown or already collected/);
+  }, { FAKE_PI_DELAY_MS: "2000" });
+});
+
+test("background success usage is collected once and foreground remains available", async () => {
+  await withBackgroundFixture("progress-usage", async ({ tool, session }) => {
+    const runId = await startBackground(tool);
+    const result = await waitBackground(tool, runId);
+    assert.equal(runId, "run-1");
+    assert.equal(result.content[0].text, "Review complete");
+    assert.equal(result.details.runId, runId);
+    assert.equal(result.details.agent, "scout");
+    assert.equal(result.details.backgroundStatus, "completed");
+    const call = renderText(tool.renderCall({ action: "wait", runId }, plainTheme, {}));
+    assert.equal(call, "Delegate · Wait");
+    for (const expanded of [false, true]) {
+      const rendered = renderText(tool.renderResult(result, { expanded, isPartial: false }, plainTheme, {}));
+      assert.equal(renderText(tool.renderCall({ action: "wait", runId }, plainTheme, { expanded })), "Delegate · Wait");
+      assert.equal((call + rendered).split("#1").length - 1, 1);
+    }
+    const collapsed = renderText(tool.renderResult(result, { expanded: false, isPartial: false }, plainTheme, {}));
+    assert.match(collapsed, /^Scout · #1 · \d+(?:\.\d+)?(?:ms|s)\nReview complete$/);
+    assert.doesNotMatch(collapsed, /example\/model|\blow\b|Usage:|Cleanup:|run-1/);
+    const expanded = renderText(tool.renderResult(result, { expanded: true, isPartial: false }, plainTheme, {}));
+    assert.match(expanded, /example\/model · low · /);
+    assert.match(expanded, /Usage: 8 in · 9 out · \$0\.0300/);
+    assert.match(expanded, /Cleanup: verified(?: · forced)? · exit /);
+    assert.doesNotMatch(expanded, /run-1/);
+    assert.equal(result.usage.input, 8);
+    assert.equal(result.usage.output, 9);
+    assert.equal(result.usage.cost.total, 0.03);
+    await assert.rejects(waitBackground(tool, runId, "second-wait"), /Unknown or already collected/);
+    const toolResult = session.eventHandlers.get("tool_result");
+    assert.equal(await toolResult({ toolName: "delegate", toolCallId: "wait" }), undefined);
+    for (const action of [undefined, "run"]) {
+      const foreground = await tool.execute("foreground", { agent: "scout", task: "Inspect", ...(action ? { action } : {}) },
+        undefined, undefined, context(process.cwd()));
+      assert.equal(foreground.content[0].text, "Review complete");
+      assert.deepEqual(foreground.usage, result.usage);
+    }
+    assert.deepEqual(session.messages, []);
+  });
+});
+
+test("waiting failure throws a Pi error and bills collected usage exactly once", async () => {
+  await withBackgroundFixture("assistant-error-after-usage", async ({ tool, session }) => {
+    const runId = await startBackground(tool);
+    let failureText;
+    await assert.rejects(waitBackground(tool, runId, "failed-wait"), (error) => {
+      failureText = error.message;
+      assert.match(failureText, /^Scout · #1 · Delegate failed \[child_error\].*fixture model error/);
+      return true;
+    });
+    assert.deepEqual(session.messages, [], "an active waiter owns failure reporting");
+    const toolResult = session.eventHandlers.get("tool_result");
+    assert.equal(await toolResult({ toolName: "delegate", toolCallId: "start" }), undefined);
+    const patch = await toolResult({ toolName: "delegate", toolCallId: "failed-wait", isError: true });
+    assert.equal(patch.usage.input, 3);
+    assert.equal(patch.usage.output, 2);
+    assert.equal(patch.usage.cost.total, 0.01);
+    assert.equal(patch.details.runId, runId);
+    assert.equal(patch.details.agent, "scout");
+    assert.equal(patch.details.model, "example/model");
+    assert.equal(patch.details.thinking, "low");
+    assert.equal(patch.details.backgroundStatus, "failed");
+    assert.equal(patch.details.usage.input, 3);
+    assert.ok(patch.details.cleanup);
+    for (const expanded of [false, true]) {
+      const content = [{ type: "text", text: failureText }];
+      const rendered = renderText(tool.renderResult({ content, details: patch.details },
+        { expanded, isPartial: false }, plainTheme, {}));
+      assert.equal(content[0].text, failureText, "rendering preserves model-facing diagnostics");
+      assert.ok(rendered.endsWith(failureText.slice("Scout · #1 · ".length)));
+      const call = renderText(tool.renderCall({ action: "wait", runId }, plainTheme, { expanded }));
+      assert.equal(call, "Delegate · Wait");
+      assert.equal((call + rendered).split("#1").length - 1, 1);
+      const unprefixed = renderText(tool.renderResult({ content: [{ type: "text", text: "Original Scout · #1 · diagnostic" }], details: patch.details },
+        { expanded, isPartial: false }, plainTheme, {}));
+      assert.ok(unprefixed.endsWith("Original Scout · #1 · diagnostic"), "only the generated leading prefix is stripped");
+      assert.match(rendered, /^Scout · #1 · Failed\n/);
+      assert.match(rendered, /fixture model error/);
+      assert.doesNotMatch(rendered, /run-1/);
+      if (expanded) {
+        assert.match(rendered, /example\/model · low/);
+        assert.match(rendered, /Usage: 3 in · 2 out · \$0\.0100/);
+        assert.match(rendered, /Cleanup:/);
+      }
+    }
+    assert.equal(await toolResult({ toolName: "delegate", toolCallId: "failed-wait" }), undefined);
+    await assert.rejects(waitBackground(tool, runId, "duplicate-failure"), /Unknown or already collected/);
+    assert.equal(await toolResult({ toolName: "delegate", toolCallId: "duplicate-failure" }), undefined);
+  });
+});
+
+for (const hasUI of [false, true]) {
+  test(`uncollected failure sends one visible non-turn-triggering message (hasUI=${hasUI})`, async () => {
+    await withBackgroundFixture("assistant-error", async ({ tool, session }) => {
+      const runId = await startBackground(tool);
+      await eventually(() => session.messages.length > 0);
+      assert.equal(session.messages.length, 1);
+      const { message, options } = session.messages[0];
+      assert.equal(message.customType, "pi-delegator-failure");
+      assert.equal(message.display, true);
+      assert.deepEqual(message.details, { runId, agent: "scout", diagnostic: "[child_error] fixture model error" });
+      const renderer = session.messageRenderers.get(message.customType);
+      assert.ok(renderer);
+      const savedMessage = JSON.parse(JSON.stringify(message));
+      for (const expanded of [false, true]) {
+        const rendered = renderText(renderer(savedMessage, { expanded }, plainTheme));
+        assert.match(rendered, /^Scout · #1 · Failed\n/);
+        assert.match(rendered, /\[child_error\] fixture model error/);
+        if (expanded) assert.match(rendered, /While the session is active, Collect with delegate\(\{action: "wait", runId: "run-1"\}\)/);
+        else assert.equal(rendered, "Scout · #1 · Failed\n[child_error] fixture model error");
+        assert.equal(rendered.split("#1").length - 1, 1, "custom failure badge appears only in the header");
+      }
+      assert.match(message.content, /fixture model error/);
+      assert.deepEqual(options, { triggerTurn: false });
+      await assert.rejects(waitBackground(tool, runId), /\[child_error\]/);
+      await delay(50);
+      assert.equal(session.messages.length, 1);
+    }, {}, { hasUI });
+  });
+}
+
+test("custom failure renderer uses saved profile details after collection and navigation", async () => {
+  await withBackgroundFixture("assistant-error", async ({ tool, session }) => {
+    const started = await tool.execute("custom-start", { action: "start", agent: "auditor", task: "Inspect" },
+      undefined, undefined, context(process.cwd()));
+    const runId = started.content[0].text.match(/Started background delegate ([\w-]+)/)?.[1];
+    assert.equal(runId, "run-1");
+    await eventually(() => session.messages.length === 1);
+    const saved = JSON.parse(JSON.stringify(session.messages[0].message));
+    assert.deepEqual(saved.details, {
+      runId, agent: "auditor", displayName: "Code Auditor", diagnostic: "[child_error] fixture model error",
+    });
+    const renderer = session.messageRenderers.get(saved.customType);
+    const renderSaved = () => {
+      for (const expanded of [false, true]) {
+        // Rendering must rely on persisted details, not message text or a live run.
+        const rendered = renderText(renderer({ ...saved, content: "unrelated fallback content" }, { expanded }, plainTheme));
+        assert.match(rendered, /^Code Auditor · #1 · Failed\n/);
+        assert.match(rendered, /\[child_error\] fixture model error/);
+        if (expanded) assert.match(rendered, /Collect with delegate\(\{action: "wait", runId: "run-1"\}\)/);
+        else assert.equal(rendered, "Code Auditor · #1 · Failed\n[child_error] fixture model error");
+        assert.equal(rendered.split("#1").length - 1, 1);
+        assert.doesNotMatch(rendered, /unrelated fallback content/);
+      }
+    };
+    renderSaved();
+    await assert.rejects(waitBackground(tool, runId), /\[child_error\]/);
+    renderSaved();
+    await session.eventHandlers.get("session_before_switch")({}, context(process.cwd()));
+    renderSaved();
+    await assert.rejects(waitBackground(tool, runId), /Unknown or already collected/);
+    assert.equal(session.messages.length, 1);
+  }, {}, { config: { background: true, profiles: {
+    auditor: configuredProfile({ displayName: "Code Auditor", deadlineMs: null }),
+  } } });
+});
+
+async function trackWaitIntervals(run) {
+  const originalSet = globalThis.setInterval;
+  const originalClear = globalThis.clearInterval;
+  const active = new Set();
+  let created = 0;
+  const periods = [];
+  globalThis.setInterval = (...args) => {
+    periods.push(args[1]);
+    const timer = originalSet(...args);
+    active.add(timer);
+    created++;
+    return timer;
+  };
+  globalThis.clearInterval = (timer) => {
+    active.delete(timer);
+    return originalClear(timer);
+  };
+  try {
+    await run({ active, created: () => created, periods });
+    assert.equal(active.size, 0, "all observation timers must be cleared");
+  } finally {
+    for (const timer of active) originalClear(timer);
+    globalThis.setInterval = originalSet;
+    globalThis.clearInterval = originalClear;
+  }
+}
+
+// Pi re-invokes renderResult on invalidation with the same per-card state.
+function liveStartCard(tool, result, toolCallId, throwOnInvalidate = false, args) {
+  const frames = [];
+  const renderContext = {
+    toolCallId,
+    args,
+    state: {},
+    invalidate() {
+      if (throwOnInvalidate) throw new Error("UI invalidation failed");
+      draw();
+    },
+  };
+  const draw = () => {
+    const frame = { at: Date.now() };
+    for (const expanded of [false, true]) {
+      frame[expanded ? "expanded" : "collapsed"] = renderText(tool.renderResult(result,
+        { expanded, isPartial: false }, plainTheme, renderContext));
+    }
+    frames.push(frame);
+    return frame;
+  };
+  draw();
+  return { frames, draw, state: renderContext.state };
+}
+
+test("static starts redraw only on settlement while parallel active and silent waits own foreground progress", async () => {
+  await withBackgroundFixture("clean", async ({ tool }) => {
+    await trackWaitIntervals(async ({ active, created, periods }) => {
+      const starts = await Promise.all([true, false].map((activity, i) => tool.execute(`live-${i}`,
+        { action: "start", agent: i === 0 ? "auditor" : "tester",
+          task: JSON.stringify({ label: `live-${i}`, activity, finishMs: 3_350 }), model: `provider/live-${i}` },
+        undefined, undefined, context(process.cwd()))));
+      const cards = starts.map((start, i) => liveStartCard(tool, start, `live-${i}`));
+      assert.equal(active.size, 0, "start cards never arm timers");
+      assert.deepEqual(periods, []);
+      await delay(1_100);
+      assert.ok(cards.every((card) => card.frames.length === 1), "neither activity nor elapsed time redraws starts");
+      for (const [i, card] of cards.entries()) {
+        for (const expanded of [false, true]) {
+          const text = card.frames[0][expanded ? "expanded" : "collapsed"];
+          assert.match(text.split("\n")[0], new RegExp(`^${i === 0 ? "Code Auditor" : "Tester"} · #${i + 1} · ${expanded ? "provider/" : ""}live-${i} · ${starts[i].details.thinking} · Started$`));
+          assert.ok(text.includes(`\n\n${starts[i].details.taskPreview}`));
+          assert.doesNotMatch(text, /Running|Usage:|Latest commentary|Recent tool starts|No tool starts yet/);
+        }
+      }
+      const mismatch = liveStartCard(tool, starts[0], "unrelated-call");
+      assert.match(mismatch.frames[0].collapsed, /^Code Auditor · #1 · live-0 · minimal · Started \(inactive\)\n/);
+      assert.doesNotMatch(mismatch.frames[0].expanded, /Collect with|Usage:|Running/);
+      assert.equal(created(), 0, "mismatched history cannot observe a same-ID run");
+      const updates = [[], []];
+      const waits = starts.map((start, i) => tool.execute(`live-wait-${i}`,
+        { action: "wait", runId: start.details.runId }, undefined, (update) => updates[i].push(update), context(process.cwd())));
+      assert.equal(created(), 2, "only admitted waits with observers arm timers");
+      assert.equal(active.size, 2);
+      assert.deepEqual(periods, [1_000, 1_000]);
+      for (const list of updates) {
+        assert.equal(list.length, 1, "admission publishes before yielding");
+        assert.ok(list[0].details.durationMs >= 1_100, "duration starts at launch, not wait admission");
+      }
+      const results = await Promise.all(waits);
+      assert.equal(active.size, 0, "settlement clears registry heartbeats before collection returns");
+      for (const [i, card] of cards.entries()) {
+        assert.equal(card.frames.length, 2, "one settlement redraw, no progress redraws");
+        const running = updates[i].map((update) => ({
+          update,
+          collapsed: renderText(tool.renderResult(update, { expanded: false, isPartial: true }, plainTheme, {})),
+          expanded: renderText(tool.renderResult(update, { expanded: true, isPartial: true }, plainTheme, {})),
+        }));
+        assert.ok(running.length >= 3, "silent and active waits both receive heartbeat updates");
+        assert.match(running[0].collapsed, / · \d+(?:\.\d+)?(?:ms|s) · Running\n/);
+        for (const frame of running) {
+          const recentTools = frame.collapsed.includes("→ grep") ? ["read live-0.ts", "grep"]
+            : frame.collapsed.includes("read live-0.ts") ? ["read live-0.ts"] : [];
+          const progress = { totalCalls: recentTools.length, recentTools,
+            ...(frame.collapsed.includes("Latest commentary:") ? {
+              latestAssistantText: frame.collapsed.includes("live-0 follow-up") ? "live-0 follow-up" : "live-0",
+            } : {}) };
+          for (const expanded of [false, true]) {
+            const text = frame[expanded ? "expanded" : "collapsed"];
+            const [, elapsed, unit] = text.match(/ · (\d+(?:\.\d+)?)(ms|s) · Running\n/);
+            assert.ok(!text.includes(starts[i].details.taskPreview), "wait never duplicates the task");
+            assert.doesNotMatch(text, /Usage:/, "live usage is not an extra background-only row");
+            assert.match(text.split("\n")[0], new RegExp(` · ${expanded ? "provider/" : ""}live-${i} · ${starts[i].details.thinking} · `));
+            const foreground = renderText(tool.renderResult({
+              content: [{ type: "text", text: renderProgress(progress) }],
+              details: { ...frame.update.details, runId: undefined, backgroundStatus: undefined,
+                durationMs: Number(elapsed) * (unit === "s" ? 1_000 : 1),
+                expandedProgress: renderProgress(progress, true) },
+            }, { expanded, isPartial: true }, plainTheme, {}));
+            const aligned = text.replace(` · #${i + 1}`, "");
+            assert.equal(aligned, foreground, "wait header/activity exactly match foreground except badge");
+          }
+        }
+        assert.notEqual(running[0].collapsed.split("\n")[0], running[1].collapsed.split("\n")[0], "elapsed advances");
+        assert.ok(running.every((frame) => frame.expanded.includes(`provider/live-${i}`)));
+        assert.ok(running.every((frame) => !frame.collapsed.includes(`live-${1 - i}.ts`)), "activity is per run");
+        if (i === 0) {
+          assert.ok(running.some((frame) => frame.collapsed.includes("read live-0.ts")));
+          assert.ok(running.some((frame) => frame.expanded.includes("Latest commentary: live-0")));
+          assert.ok(running.some((frame) => frame.expanded.includes("→ grep")));
+        } else {
+          assert.ok(running.every((frame) => frame.collapsed.endsWith("No tool starts yet")));
+          assert.ok(running.every((frame) => !/Recent tool starts|read live-0/.test(frame.expanded)));
+        }
+        const terminal = card.frames.at(-1);
+        assert.match(terminal.collapsed, / · Completed · \d+(?:\.\d+)?(?:ms|s)$/);
+        assert.doesNotMatch(terminal.expanded, /complete|Usage:|Latest commentary|Recent tool starts/);
+        assert.equal(card.state.summary.status, "Completed");
+        assert.equal(results[i].content[0].text, `live-${i} complete`, "answer belongs only to collection");
+        assert.ok(updates[i].every((update) => update.details.runId === starts[i].details.runId));
+        const afterCollection = card.draw();
+        assert.equal(afterCollection.collapsed, terminal.collapsed, "per-card summary survives registry removal");
+        assert.equal(afterCollection.expanded, terminal.collapsed, "collected start has no collection instruction");
+      }
+      const counts = cards.map((card) => card.frames.length);
+      const updateCounts = updates.map((list) => list.length);
+      await delay(1_100);
+      assert.deepEqual(cards.map((card) => card.frames.length), counts, "no late redraw after collection");
+      assert.deepEqual(updates.map((list) => list.length), updateCounts, "no late wait update after collection");
+    });
+  }, { PI_DELEGATOR_PI_BINARY: resolve("test/fixtures/heartbeat-pi.mjs") }, { config: { background: true, profiles: {
+    auditor: configuredProfile({ displayName: "Code Auditor", deadlineMs: null }),
+  } } });
+});
+
+for (const throwing of [false, true]) {
+  test(`static failed starts settle once and collect diagnostics despite throwing invalidate=${throwing}`, async () => {
+    await withBackgroundFixture("assistant-error-after-usage", async ({ tool, session }) => {
+      await trackWaitIntervals(async ({ active }) => {
+        const start = await tool.execute("live-failure", { action: "start", agent: "scout", task: "Inspect" },
+          undefined, undefined, context(process.cwd()));
+        const card = liveStartCard(tool, start, "live-failure", throwing);
+        assert.equal(active.size, 0, "starts have no heartbeat");
+        await eventually(() => session.messages.length === 1);
+        assert.equal(card.frames.length, throwing ? 1 : 2, "one settlement invalidation attempt");
+        assert.equal(active.size, 0);
+        const failed = card.draw();
+        assert.match(failed.collapsed, /^Scout · #1 · Failed · \d+(?:\.\d+)?(?:ms|s)$/);
+        assert.doesNotMatch(failed.expanded, /fixture model error|Usage:|Cleanup:/);
+        assert.equal(card.state.summary.status, "Failed");
+        assert.match(session.messages[0].message.content, /fixture model error/);
+        assert.deepEqual(session.messages[0].options, { triggerTurn: false });
+        await assert.rejects(waitBackground(tool, start.details.runId, "collect-live-failure"), /fixture model error/);
+        const patch = await session.eventHandlers.get("tool_result")({ toolName: "delegate", toolCallId: "collect-live-failure", isError: true });
+        assert.equal(patch.usage.input, 3);
+        const diagnostics = renderText(tool.renderResult({ content: [{ type: "text", text: "fixture model error" }], details: patch.details },
+          { expanded: true, isPartial: false }, plainTheme, {}));
+        assert.match(diagnostics, /fixture model error/);
+        assert.match(diagnostics, /Cleanup:/);
+        assert.equal(card.draw().expanded, failed.collapsed, "only compact failure summary survives collection");
+        const count = card.frames.length;
+        await delay(1_100);
+        assert.equal(card.frames.length, count);
+      });
+    });
+  });
+}
+
+for (const event of ["session_before_switch", "session_before_fork", "session_before_tree", "session_shutdown"]) {
+  test(`pending wait heartbeat and start observation stop on ${event}`, async () => {
+    await withBackgroundFixture("clean", async ({ tool, session }) => {
+      await trackWaitIntervals(async ({ active }) => {
+        const start = await tool.execute("live-navigation", { action: "start", agent: "scout",
+          task: JSON.stringify({ label: "navigation", activity: false, finishMs: 10_000 }) },
+          undefined, undefined, context(process.cwd()));
+        const card = liveStartCard(tool, start, "live-navigation");
+        assert.equal(active.size, 0);
+        const updates = [];
+        const waiting = tool.execute("navigation-wait", { action: "wait", runId: start.details.runId },
+          undefined, (update) => updates.push(update), context(process.cwd()));
+        const rejected = assert.rejects(waiting, /cancelled|Unknown|closed/);
+        assert.equal(active.size, 1);
+        await session.eventHandlers.get(event)({}, context(process.cwd()));
+        await rejected;
+        const updateCount = updates.length;
+        assert.equal(active.size, 0);
+        const count = card.frames.length;
+        await delay(1_100);
+        assert.equal(card.frames.length, count, "navigation/shutdown cannot invalidate removed cards");
+        assert.equal(updates.length, updateCount, "navigation/shutdown stops wait updates");
+        assert.match(card.frames.at(-1).collapsed, /^Scout · #1 · model · low · Started \(inactive\)\n/, "closure automatically redraws retained cards even if navigation is cancelled");
+        assert.doesNotMatch(card.frames.at(-1).expanded, /Collect with|Running/);
+        assert.deepEqual(session.messages, []);
+      });
+    }, { PI_DELEGATOR_PI_BINARY: resolve("test/fixtures/heartbeat-pi.mjs") });
+  });
+}
+
+test("pending silent waits publish immediate elapsed progress and one-second heartbeats", async () => {
+  await withBackgroundFixture("clean", async ({ tool }) => {
+    await trackWaitIntervals(async ({ active }) => {
+      const starts = await Promise.all(["auditor", "tester"].map((agent, i) => tool.execute(`start-${i}`,
+        { action: "start", agent, task: JSON.stringify({ label: agent, activity: false, finishMs: 3_350 }), model: `provider/model-${i}` },
+        undefined, undefined, context(process.cwd()))));
+      await delay(1_100);
+      const updates = [[], []];
+      const waits = starts.map((start, i) => tool.execute(`wait-${i}`,
+        { action: "wait", runId: start.details.runId }, undefined, (update) => updates[i].push(update), context(process.cwd())));
+      assert.equal(active.size, 2, "each observed pending wait owns a timer");
+      for (const [i, list] of updates.entries()) {
+        assert.equal(list.length, 1, "update precedes yielding the wait");
+        assert.ok(list[0].details.durationMs >= 1_100, "elapsed includes time before admission");
+        assert.equal(list[0].content[0].text, renderProgress({ totalCalls: 0, recentTools: [] }));
+        const rendered = renderText(tool.renderResult(list[0], { expanded: false, isPartial: true }, plainTheme, {}));
+        assert.match(rendered, new RegExp(`^${i === 0 ? "Code Auditor" : "Tester"} · #${i + 1} · model-${i} · ${starts[i].details.thinking} · \\d+(?:\\.\\d+)?s · Running\\nNo tool starts yet$`));
+        assert.equal(renderText(tool.renderCall({ action: "wait", runId: starts[i].details.runId }, plainTheme, {})), "Delegate · Wait");
+        const expanded = renderText(tool.renderResult(list[0], { expanded: true, isPartial: true }, plainTheme, {}));
+        assert.equal(expanded, rendered.replace(` · model-${i}`, ` · provider/model-${i}`), "silent expanded wait uses full model");
+      }
+      const results = await Promise.all(waits);
+      assert.equal(active.size, 0);
+      for (const [i, list] of updates.entries()) {
+        assert.ok(list.length >= 3, "pending waits receive elapsed heartbeats");
+        assert.ok(list.at(-1).details.durationMs > list[0].details.durationMs);
+        assert.ok(list.every((update) => update.details.runId === starts[i].details.runId && update.details.model === `provider/model-${i}`));
+        assert.equal(results[i].details.backgroundStatus, "completed");
+        assert.doesNotMatch(renderText(tool.renderResult(results[i], { expanded: false, isPartial: false }, plainTheme, {})), /Waiting/);
+      }
+      const counts = updates.map((list) => list.length);
+      await delay(1_100);
+      assert.deepEqual(updates.map((list) => list.length), counts, "no late updates");
+    });
+  }, { PI_DELEGATOR_PI_BINARY: resolve("test/fixtures/heartbeat-pi.mjs") }, { config: { background: true, profiles: {
+    auditor: configuredProfile({ displayName: "Code Auditor", deadlineMs: null }),
+  } } });
+});
+
+test("wait observers tolerate errors and invalid waits add no timers", async () => {
+  await withBackgroundFixture("delayed-clean", async ({ tool }) => {
+    await trackWaitIntervals(async ({ active, created }) => {
+      const id = await startBackground(tool);
+      const controller = new AbortController();
+      let observed = 0;
+      const observer = () => { observed++; throw new Error("observer failure"); };
+      const wait = tool.execute("aborted", { action: "wait", runId: id }, controller.signal, observer, context(process.cwd()));
+      assert.equal(observed, 1);
+      assert.equal(active.size, 1);
+      await assert.rejects(tool.execute("duplicate", { action: "wait", runId: id }, undefined, observer, context(process.cwd())), /already has a waiter/);
+      await assert.rejects(tool.execute("unknown", { action: "wait", runId: "run-999" }, undefined, observer, context(process.cwd())), /Unknown/);
+      assert.equal(created(), 1, "invalid waits add no timers");
+      controller.abort();
+      await assert.rejects(wait, /wait cancelled.*session-owned/);
+      assert.equal(active.size, 0);
+      await assert.rejects(tool.execute("already-aborted", { action: "wait", runId: id }, controller.signal, observer, context(process.cwd())), /wait cancelled/);
+      assert.equal(created(), 1, "already-aborted wait adds no timer");
+      assert.equal((await waitBackground(tool, id)).content[0].text, "delayed result");
+      assert.equal(created(), 1, "no observer means no additional timer");
+      const next = await startBackground(tool);
+      assert.equal((await tool.execute("throwing-success", { action: "wait", runId: next }, undefined, observer, context(process.cwd()))).details.backgroundStatus, "completed");
+      assert.ok(observed >= 4, "throwing observers still receive admitted progress and heartbeat updates");
+      assert.equal(created(), 2);
+      assert.equal(active.size, 0);
+      const count = observed;
+      await delay(1_100);
+      assert.equal(observed, count);
+    });
+  }, { FAKE_PI_DELAY_MS: "2200" });
+  await withBackgroundFixture("assistant-error", async ({ tool }) => {
+    await trackWaitIntervals(async ({ active }) => {
+      const id = await startBackground(tool);
+      const updates = [];
+      await assert.rejects(tool.execute("failure", { action: "wait", runId: id }, undefined,
+        (update) => updates.push(update), context(process.cwd())), /child_error/);
+      assert.equal(updates.length, 1);
+      assert.equal(active.size, 0);
+      await delay(1_100);
+      assert.equal(updates.length, 1);
+    });
+  });
+});
+
+test("cancelling and retrying observed waits retains the start settlement observer", async () => {
+  await withBackgroundFixture("clean", async ({ tool }) => {
+    await trackWaitIntervals(async ({ active, created }) => {
+      const start = await tool.execute("retry-start", { action: "start", agent: "scout",
+        task: JSON.stringify({ label: "retry", activity: true, finishMs: 2_400 }) },
+        undefined, undefined, context(process.cwd()));
+      const card = liveStartCard(tool, start, "retry-start");
+      const controller = new AbortController();
+      const first = [];
+      const waiting = tool.execute("first-wait", { action: "wait", runId: start.details.runId },
+        controller.signal, (update) => first.push(update), context(process.cwd()));
+      assert.equal(first.length, 1);
+      assert.equal(active.size, 1);
+      controller.abort();
+      await assert.rejects(waiting, /wait cancelled.*session-owned/);
+      assert.equal(active.size, 0);
+      assert.equal(card.frames.length, 1, "cancelling wait does not redraw or remove start observation");
+      const retry = [];
+      const result = await tool.execute("retry-wait", { action: "wait", runId: start.details.runId },
+        undefined, (update) => retry.push(update), context(process.cwd()));
+      assert.equal(result.content[0].text, "retry complete");
+      assert.equal(created(), 2);
+      assert.equal(active.size, 0);
+      assert.ok(retry.length >= 3);
+      assert.equal(first.length, 1, "cancelled subscription receives no later progress");
+      assert.equal(card.frames.length, 2, "retained start observation receives settlement exactly once");
+      assert.match(card.frames.at(-1).collapsed, / · Completed · /);
+      const count = retry.length;
+      await delay(1_100);
+      assert.equal(retry.length, count);
+      assert.equal(card.frames.length, 2);
+    });
+  }, { PI_DELEGATOR_PI_BINARY: resolve("test/fixtures/heartbeat-pi.mjs") });
+});
+
+test("cancelling wait leaves the real background child available for later collection", async () => {
+  await withBackgroundFixture("delayed-clean", async ({ tool, session, directory }) => {
+    const runId = await startBackground(tool);
+    await fileAppears(join(directory, "args.json"));
+    const controller = new AbortController();
+    const waiting = waitBackground(tool, runId, "cancelled-wait", controller.signal);
+    controller.abort();
+    await assert.rejects(waiting, /wait cancelled.*session-owned/);
+    assert.equal((await waitBackground(tool, runId, "retry-wait")).content[0].text, "delayed result");
+    assert.deepEqual(session.messages, []);
+    const toolResult = session.eventHandlers.get("tool_result");
+    assert.equal(await toolResult({ toolName: "delegate", toolCallId: "cancelled-wait" }), undefined);
+  }, { FAKE_PI_DELAY_MS: "1000" });
+});
+
+for (const event of ["session_shutdown", "session_before_switch", "session_before_fork", "session_before_tree"]) {
+  test(`${event} aborts background children and cleans TERM-resistant descendants`, { timeout: 12_000 }, async () => {
+    await withBackgroundFixture("term-resistant-descendant", async ({ tool, session, directory }) => {
+      const runId = await startBackground(tool);
+      const pidPath = join(directory, "descendant.pid");
+      await fileAppears(pidPath);
+      const pid = Number(await readFile(pidPath, "utf8"));
+      // Give the descendant time to install its TERM handler before exercising escalation.
+      await delay(100);
+      const before = Date.now();
+      await session.eventHandlers.get(event)({}, context(process.cwd()));
+      assert.ok(Date.now() - before < 8_000, "session cleanup must be bounded");
+      assert.match(await readFile(join(directory, "signals"), "utf8"), /SIGTERM/);
+      let status = "";
+      try { status = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8", timeout: 1000 }).trim(); }
+      catch (error) { if (error.status !== 1) throw error; }
+      assert.ok(status === "" || status.startsWith("Z"), `descendant ${pid} still live: ${status}`);
+      assert.deepEqual(session.messages, [], "session cleanup should not announce cancellation as uncollected failure");
+      await assert.rejects(waitBackground(tool, runId), /Unknown or already collected/);
+      if (event === "session_shutdown") {
+        await session.eventHandlers.get(event)({}, context(process.cwd()));
+        await assert.rejects(startBackground(tool), /session is closing/);
+      } else {
+        // Another extension may cancel navigation: no session_start follows the pre-event.
+        process.env.FAKE_PI_SCENARIO = "clean";
+        const replacement = await startBackground(tool);
+        assert.equal(runId, "run-1");
+        assert.equal(replacement, "run-2");
+        assert.equal((await waitBackground(tool, replacement)).content[0].text, "Scout result");
+      }
+      assert.deepEqual(session.messages, []);
+    });
+  });
+}

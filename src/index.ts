@@ -16,11 +16,12 @@ import {
 } from "./agents.ts";
 import {
   getProjectDelegateConfigPath,
-  loadDelegateProfiles,
+  loadDelegateConfig,
   MAX_MODEL_BYTES,
   normalizeModelSelector,
 } from "./config.ts";
 import type { UsageSummary } from "./protocol.ts";
+import { BackgroundRuns } from "./background.ts";
 import {
   runDelegate,
   type CleanupDetails,
@@ -34,13 +35,12 @@ export const MAX_TASK_BYTES = 32 * 1024;
 const MAX_COLLAPSED_RESULT_LINES = 10;
 const MAX_COLLAPSED_RESULT_CODEPOINTS = 1_000;
 
-function createDelegateParameters(profiles: DelegateProfileRegistry) {
+function createDelegateParameters(profiles: DelegateProfileRegistry, background: boolean) {
   const names = Object.keys(profiles);
   const descriptions = names
     .map((name) => `${name}: ${profiles[name]!.description}`)
     .join("; ");
-  return Type.Object(
-    {
+  const fields = {
       agent: StringEnum(names, {
         description: descriptions.length === 0
           ? "No delegate profiles are currently enabled"
@@ -64,9 +64,36 @@ function createDelegateParameters(profiles: DelegateProfileRegistry) {
           minLength: 1,
         }),
       ),
-    },
-    { additionalProperties: false },
-  );
+  };
+  const foreground = Type.Object(fields, { additionalProperties: false });
+  return background
+    ? Type.Object({
+        ...fields,
+        agent: Type.Optional(fields.agent),
+        task: Type.Optional(fields.task),
+        action: Type.Optional(StringEnum(["run", "start", "wait"])),
+        runId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+      }, { additionalProperties: false })
+    : foreground;
+}
+
+type BackgroundOutcome =
+  | { readonly result: Awaited<ReturnType<typeof runDelegate>>; readonly profile: DelegateProfile; readonly model: string | undefined }
+  | { readonly error: string; readonly profile: DelegateProfile; readonly model: string | undefined };
+
+interface BackgroundMetadata {
+  readonly toolCallId: string;
+  readonly profile: DelegateProfile;
+  readonly model: string | undefined;
+  readonly startedAt: number;
+  readonly progress: ProgressSummary;
+  activity: string;
+  usage: UsageSummary;
+}
+
+interface StartCardState {
+  observing?: boolean;
+  summary?: { status: "Completed" | "Failed"; durationMs: number };
 }
 
 export interface DelegateDetails {
@@ -82,6 +109,24 @@ export interface DelegateDetails {
   readonly malformedLineCount: number;
   readonly exitCode: number | null;
   readonly cleanup: CleanupDetails;
+  readonly runId?: string;
+  readonly backgroundStatus?: "started" | "waiting" | "completed" | "failed";
+  readonly taskPreview?: string;
+}
+
+interface BackgroundFailureDetails {
+  readonly runId: string;
+  readonly agent: string;
+  readonly displayName?: string;
+  readonly diagnostic: string;
+}
+
+function runBadge(runId: string): string {
+  return /^run-[1-9][0-9]*$/u.test(runId) ? `#${runId.slice(4)}` : compactDisplayText(runId, 64);
+}
+
+function collectionInstruction(runId: string): string {
+  return `Collect with delegate({action: "wait", runId: ${JSON.stringify(terminalSafe(runId))}}).`;
 }
 
 function formatFailure(failure: DelegateFailure): string {
@@ -193,17 +238,41 @@ function formatRenderedResult(
     : expanded
       ? details.model
       : compactModelSelector(details.model);
-  const header =
-    theme.fg("toolTitle", theme.bold(compactDisplayText(profileLabel(details.agent, details.displayName), 64))) +
-    theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${formatDuration(details.durationMs)}${isPartial ? " · Running" : ""}`);
+  let header =
+    theme.fg("toolTitle", theme.bold(compactDisplayText(profileLabel(details.agent, details.displayName), 64)));
+  if (details.runId === undefined || details.backgroundStatus === "waiting") {
+    if (details.runId !== undefined) header += theme.fg("muted", ` · ${runBadge(details.runId)}`);
+    header += theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${formatDuration(details.durationMs)}${isPartial ? " · Running" : ""}`);
+  } else {
+    header += theme.fg("muted", ` · ${runBadge(details.runId)} · ${
+      details.backgroundStatus === "started" ? "Started" : details.backgroundStatus === "failed" ? "Failed" : formatDuration(details.durationMs)
+    }`);
+    if (expanded) {
+      header += theme.fg("muted", `\n${compactDisplayText(model, 256)} · ${details.thinking} · ${formatDuration(details.durationMs)}`);
+      if (details.backgroundStatus !== "started") {
+        header += theme.fg("muted", `\nUsage: ${details.usage.input} in · ${details.usage.output} out · $${details.usage.cost.toFixed(4)}`);
+        header += theme.fg("muted", `\nCleanup: ${details.cleanup.diagnostic ? compactDisplayText(details.cleanup.diagnostic, 1_000) : "verified"}${details.cleanup.forced ? " · forced" : ""} · exit ${details.exitCode ?? "unknown"}`);
+      }
+    }
+  }
+  let renderedText = resultText(content);
+  if (details.backgroundStatus === "failed" && details.runId !== undefined) {
+    const prefix = `${profileLabel(details.agent, details.displayName)} · ${runBadge(details.runId)} · `;
+    if (renderedText.startsWith(prefix)) renderedText = renderedText.slice(prefix.length);
+  }
   const output = formatRenderedOutput(
     expanded && isPartial && details.expandedProgress !== undefined
       ? details.expandedProgress
-      : resultText(content),
+      : details.backgroundStatus === "started" && details.runId !== undefined
+        ? details.taskPreview ?? ""
+        : renderedText,
     expanded || isPartial,
     theme,
   );
-  return output ? `${header}\n${output}` : header;
+  const instruction = expanded && details.backgroundStatus === "started" && details.runId !== undefined
+    ? theme.fg("muted", `\n${collectionInstruction(details.runId)}`)
+    : "";
+  return header + (output ? `\n${output}` : "") + instruction;
 }
 
 async function resolveWorkingDirectory(requested: string | undefined, parentCwd: string): Promise<string> {
@@ -221,19 +290,21 @@ async function resolveWorkingDirectory(requested: string | undefined, parentCwd:
 function registerDelegateTool(
   pi: ExtensionAPI,
   profiles: DelegateProfileRegistry,
-  recordFailedUsage: (toolCallId: string, usage: Usage) => void,
+  recordFailedUsage: (toolCallId: string, usage: Usage, details?: DelegateDetails) => void,
+  background: boolean,
+  runs: BackgroundRuns<BackgroundOutcome, BackgroundMetadata>,
 ): void {
-  const DelegateParameters = createDelegateParameters(profiles);
+  const DelegateParameters = createDelegateParameters(profiles, background);
   const profileSummary = Object.values(profiles)
     .map((profile) => `${profile.name} (${profile.description})`)
     .join(", ");
 
-  pi.registerTool<typeof DelegateParameters, DelegateDetails>({
+  pi.registerTool<typeof DelegateParameters, DelegateDetails | undefined>({
     name: "delegate",
     label: "Delegate",
     description: profileSummary.length === 0
       ? "No delegate profiles are currently enabled."
-      : `Run one bounded task in a fresh Pi subprocess using an effective profile: ${profileSummary}. The model may be overridden per call.`,
+      : `Run one bounded task in a fresh Pi subprocess using an effective profile: ${profileSummary}. The model may be overridden per call.${background ? ' Optional action "start" returns a session-owned runId immediately; action "wait" with runId collects it once. Omitted action (or "run") stays foreground. Cancelling wait leaves the run owned by this session.' : ""}`,
     promptSnippet: "Delegate one bounded reconnaissance, review, advisory, behavioral verification, or implementation task to a fresh context",
     promptGuidelines: [
       "Use delegate when a focused reconnaissance, review, advisory, behavioral verification, or implementation task benefits from a fresh bounded context.",
@@ -241,7 +312,64 @@ function registerDelegateTool(
     parameters: DelegateParameters,
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const taskBytes = Buffer.byteLength(params.task, "utf8");
+      const action = "action" in params ? params.action ?? "run" : "run";
+      if (action !== "run" && !background) throw new Error("Background delegation is disabled; enable background in pi-delegator.json");
+      if (action === "wait") {
+        if (!("runId" in params) || typeof params.runId !== "string" || !params.runId.trim()) {
+          throw new Error("Delegate wait requires runId");
+        }
+        if (params.agent !== undefined || params.task !== undefined || params.model !== undefined || params.cwd !== undefined) {
+          throw new Error("Delegate wait accepts only action and runId");
+        }
+        const runId = params.runId;
+        const outcome = await runs.wait(params.runId, signal, onUpdate === undefined ? undefined : (metadata) => {
+          if (metadata === undefined) return;
+          try {
+            onUpdate({
+              content: [{ type: "text", text: metadata.activity }],
+              details: {
+                ...progressDetails(metadata.profile, metadata.model, metadata.profile.thinking, Math.max(0, Date.now() - metadata.startedAt), metadata.usage),
+                expandedProgress: renderProgress(metadata.progress, true),
+                runId,
+                backgroundStatus: "waiting",
+              },
+            });
+          } catch { /* Display observers must never affect lifecycle. */ }
+        });
+        if ("error" in outcome) throw new Error(`${profileLabel(outcome.profile.name, outcome.profile.displayName)} · ${runBadge(params.runId)} · Failed: ${outcome.error}`);
+        const { result, profile, model } = outcome;
+        if (!result.ok) {
+          recordFailedUsage(toolCallId, result.nativeUsage, {
+            ...progressDetails(profile, model, profile.thinking, result.durationMs, {
+              input: result.nativeUsage.input,
+              output: result.nativeUsage.output,
+              cacheRead: result.nativeUsage.cacheRead,
+              cacheWrite: result.nativeUsage.cacheWrite,
+              cost: result.nativeUsage.cost.total,
+              contextTokens: 0,
+              turns: 0,
+            }),
+            cleanup: result.cleanup,
+            malformedLineCount: result.malformedLineCount,
+            exitCode: result.exitCode,
+            runId: params.runId,
+            backgroundStatus: "failed",
+          });
+          throw new Error(`${profileLabel(profile.name, profile.displayName)} · ${runBadge(params.runId)} · ${formatFailure(result)}`);
+        }
+        return {
+          content: [{ type: "text" as const, text: result.text }],
+          details: { ...successDetails(result, profile, model, profile.thinking), runId: params.runId, backgroundStatus: "completed" as const },
+          usage: result.nativeUsage,
+        };
+      }
+      if (action !== "run" && action !== "start") throw new Error("Unknown delegate action");
+      if ("runId" in params && params.runId !== undefined) throw new Error("runId is only valid for delegate wait");
+      if (typeof params.agent !== "string" || typeof params.task !== "string") {
+        throw new Error("Delegate run/start requires agent and task");
+      }
+      const task = params.task;
+      const taskBytes = Buffer.byteLength(task, "utf8");
       if (params.task.trim().length === 0) throw new Error("Delegate task must not be blank");
       if (taskBytes > MAX_TASK_BYTES) {
         throw new Error(`Delegate task exceeds the ${MAX_TASK_BYTES}-byte UTF-8 limit`);
@@ -257,6 +385,45 @@ function registerDelegateTool(
         profile.model ??
         (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
       const thinking = profile.thinking;
+      if (action === "start") {
+        if (signal?.aborted) throw new Error("Delegate start cancelled");
+        const metadata: BackgroundMetadata = {
+          toolCallId, profile, model, startedAt: Date.now(),
+          progress: { totalCalls: 0, recentTools: [] },
+          activity: "No tool starts yet",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+        };
+        const runId = runs.start(async (ownedSignal): Promise<BackgroundOutcome> => {
+          try {
+            const result = await runDelegate({
+              profile, task, cwd,
+              ...(model === undefined ? {} : { model }),
+              signal: ownedSignal,
+              onProgress: (progress) => {
+                metadata.activity = formatProgress(progress, metadata.progress, cwd);
+                metadata.usage = progress.usage;
+              },
+            });
+            return { result, profile, model };
+          } catch (error) {
+            return { error: error instanceof Error ? error.message : String(error), profile, model };
+          }
+        }, metadata);
+        return {
+          content: [{ type: "text" as const, text: `Started background delegate ${runId}. Collect with delegate({action: "wait", runId: "${runId}"}).` }],
+          details: {
+            ...progressDetails(profile, model, thinking, 0, {
+              input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0,
+            }),
+            runId,
+            backgroundStatus: "started" as const,
+            taskPreview: (() => {
+              const codepoints = Array.from(terminalSafe(task));
+              return codepoints.slice(0, 240).join("") + (codepoints.length > 240 ? "…" : "");
+            })(),
+          },
+        };
+      }
       const startedAt = Date.now();
       const progressSummary: ProgressSummary = { totalCalls: 0, recentTools: [] };
       let latestText = "No tool starts yet";
@@ -317,6 +484,12 @@ function registerDelegateTool(
     },
 
     renderCall(args, theme, context) {
+      if ("action" in args && args.action === "start") {
+        return new Text(theme.fg("toolTitle", theme.bold("Delegate · Start")), 0, 0);
+      }
+      if ("runId" in args) {
+        return new Text(theme.fg("toolTitle", theme.bold("Delegate · Wait")), 0, 0);
+      }
       const task = typeof args.task === "string"
         ? context.expanded ? terminalSafe(args.task) : compactDisplayText(args.task, 240)
         : "…";
@@ -328,8 +501,50 @@ function registerDelegateTool(
       return new Text(theme.fg("toolTitle", theme.bold(title)) + "\n" + theme.fg("toolOutput", task) + "\n", 0, 0);
     },
 
-    renderResult(result, { expanded, isPartial }, theme, _context) {
+    renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details as DelegateDetails | undefined;
+      if (details?.backgroundStatus === "started" && details.runId !== undefined) {
+        // Renderer state belongs to this card, not an unbounded session-side map.
+        // Keep only a compact terminal summary after collection, never the answer.
+        const state = context.state as StartCardState | undefined;
+        const runId = details.runId;
+        // Pi retains the original call arguments; saved details are only a bounded fallback.
+        const task = typeof context.args?.task === "string" ? context.args.task : details.taskPreview ?? "";
+        const candidate = runs.snapshot(runId);
+        const snapshot = candidate?.metadata?.toolCallId === context.toolCallId ? candidate : undefined;
+        const saveSummary = (value: BackgroundOutcome | undefined) => {
+          if (!state || !value) return;
+          state.summary = {
+            status: "error" in value || !value.result.ok ? "Failed" : "Completed",
+            durationMs: "error" in value ? Math.max(0, Date.now() - (snapshot?.metadata?.startedAt ?? Date.now())) : value.result.durationMs,
+          };
+        };
+        if (snapshot?.settled) saveSummary(snapshot.value);
+        if (state && snapshot && !snapshot.settled && !state.observing && typeof context.invalidate === "function") {
+          state.observing = true;
+          runs.observe(runId, (next) => {
+            if (next.settled) saveSummary(next.value);
+            if (next.settled || runs.snapshot(runId) === undefined) delete state.observing;
+            context.invalidate();
+          });
+        }
+        const label = `${compactDisplayText(profileLabel(details.agent, details.displayName), 64)} · ${runBadge(details.runId)}`;
+        const summary = state?.summary;
+        const metadata = snapshot?.metadata;
+        const running = snapshot !== undefined && !snapshot.settled;
+        const status = summary?.status ?? (snapshot?.settled ? (snapshot.value && ("error" in snapshot.value || !snapshot.value.result.ok) ? "Failed" : "Completed") : running ? "Started" : "Started (inactive)");
+        const duration = summary?.durationMs ?? (metadata ? Math.max(0, Date.now() - metadata.startedAt) : details.durationMs);
+        let text = theme.fg("toolTitle", theme.bold(label));
+        if (status === "Started" || status === "Started (inactive)") {
+          const model = details.model === undefined ? "default model" : expanded ? details.model : compactModelSelector(details.model);
+          text += theme.fg("muted", ` · ${compactDisplayText(model, 256)} · ${compactDisplayText(details.thinking, 32)} · ${status}`);
+          if (task) text += "\n\n" + theme.fg("toolOutput", terminalSafe(task));
+        } else {
+          text += theme.fg("muted", ` · ${status} · ${formatDuration(duration)}`);
+        }
+        if (expanded && running) text += theme.fg("muted", `\n${collectionInstruction(details.runId)}`);
+        return new Text(text, 0, 0);
+      }
       const text = details === undefined
         ? formatRenderedOutput(resultText(result.content), expanded, theme)
         : formatRenderedResult(result.content, details, expanded, isPartial, theme);
@@ -339,23 +554,67 @@ function registerDelegateTool(
 }
 
 export default function piDelegator(pi: ExtensionAPI): void {
-  const userProfiles = loadDelegateProfiles();
-  const failedUsageByToolCallId = new Map<string, Usage>();
+  const userConfig = loadDelegateConfig();
+  let runs: BackgroundRuns<BackgroundOutcome, BackgroundMetadata> | undefined;
+  const failedUsageByToolCallId = new Map<string, { usage: Usage; details?: DelegateDetails }>();
+
+  pi.registerMessageRenderer<BackgroundFailureDetails>("pi-delegator-failure", (message, { expanded }, theme) => {
+    const details = message.details;
+    if (!details) return new Text(formatRenderedOutput(resultText(typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content), expanded, theme), 0, 0);
+    const title = `${compactDisplayText(profileLabel(details.agent, details.displayName), 64)} · ${runBadge(details.runId)} · Failed`;
+    return new Text(theme.fg("error", theme.bold(title)) + "\n" + formatRenderedOutput(details.diagnostic, expanded, theme) + (expanded ? theme.fg("muted", `\nWhile the session is active, ${collectionInstruction(details.runId)}`) : ""), 0, 0);
+  });
 
   pi.on("tool_result", (event) => {
     if (event.toolName !== "delegate") return;
-    const usage = failedUsageByToolCallId.get(event.toolCallId);
-    if (usage === undefined) return;
+    const failure = failedUsageByToolCallId.get(event.toolCallId);
+    if (failure === undefined) return;
     failedUsageByToolCallId.delete(event.toolCallId);
-    return { usage: { ...usage, cost: { ...usage.cost } } };
+    return {
+      usage: { ...failure.usage, cost: { ...failure.usage.cost } },
+      ...(failure.details === undefined ? {} : { details: failure.details }),
+    };
   });
 
-  pi.on("session_start", (_event, ctx) => {
-    const profiles = ctx.isProjectTrusted()
-      ? loadDelegateProfiles(getProjectDelegateConfigPath(ctx.cwd), userProfiles)
-      : userProfiles;
-    registerDelegateTool(pi, profiles, (toolCallId, usage) => {
-      failedUsageByToolCallId.set(toolCallId, usage);
-    });
+  const closeRuns = async () => {
+    await runs?.close();
+    failedUsageByToolCallId.clear();
+  };
+  pi.on("session_shutdown", closeRuns);
+  const cancelRuns = async () => { await runs?.cancelAll(); };
+  pi.on("session_before_switch", cancelRuns);
+  pi.on("session_before_fork", cancelRuns);
+  pi.on("session_before_tree", cancelRuns);
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (runs !== undefined) await runs.close();
+    const config = ctx.isProjectTrusted()
+      ? loadDelegateConfig(getProjectDelegateConfigPath(ctx.cwd), userConfig)
+      : userConfig;
+    runs = new BackgroundRuns(
+      (outcome) => "error" in outcome || !outcome.result.ok,
+      (runId, outcome) => {
+        const diagnostic = "error" in outcome
+          ? compactDisplayText(outcome.error, 1_000)
+          : outcome.result.ok ? "" : `[${outcome.result.code}] ${compactDisplayText(outcome.result.message + (outcome.result.cleanup.diagnostic ? ` Cleanup: ${outcome.result.cleanup.diagnostic}` : ""), 1_000)}`;
+        pi.sendMessage({
+          customType: "pi-delegator-failure",
+          content: `${compactDisplayText(profileLabel(outcome.profile.name, outcome.profile.displayName), 64)} · ${runBadge(runId)} · Failed\nUncollected background delegate ${runId}: ${diagnostic}. While the session is active, use delegate wait to collect diagnostics.`,
+          display: true,
+          details: {
+            runId,
+            agent: outcome.profile.name,
+            ...(outcome.profile.displayName === undefined ? {} : { displayName: outcome.profile.displayName }),
+            diagnostic,
+          } satisfies BackgroundFailureDetails,
+        }, { triggerTurn: false });
+      },
+      (outcome) => "error" in outcome || (!outcome.result.ok && (
+        outcome.result.code !== "cancelled" || Boolean(outcome.result.cleanup.diagnostic)
+      )),
+    );
+    registerDelegateTool(pi, config.profiles, (toolCallId, usage, details) => {
+      failedUsageByToolCallId.set(toolCallId, { usage, ...(details === undefined ? {} : { details }) });
+    }, config.background, runs);
   });
 }

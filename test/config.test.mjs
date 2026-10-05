@@ -8,6 +8,7 @@ import {
   DELEGATE_CONFIG_FILENAME,
   getDelegateConfigPath,
   getProjectDelegateConfigPath,
+  loadDelegateConfig,
   loadDelegateProfiles,
   MAX_CONFIG_BYTES,
   MAX_MODEL_BYTES,
@@ -38,6 +39,17 @@ async function temporaryConfig() {
     async cleanup() {
       await rm(directory, { recursive: true, force: true });
     },
+  };
+}
+
+async function backgroundConfig(t) {
+  const directory = await mkdtemp(join(tmpdir(), "pi-delegator-background-config-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, DELEGATE_CONFIG_FILENAME);
+  return {
+    directory,
+    path,
+    write: (value) => writeFile(path, JSON.stringify(value)),
   };
 }
 
@@ -85,6 +97,102 @@ test("missing config preserves the five immutable bundled profiles and Pi agent 
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     await fixture.cleanup();
+  }
+});
+
+test("default user config uses bundled profiles and foreground mode", async (t) => {
+  const config = await backgroundConfig(t);
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = config.directory;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  });
+  const defaults = loadDelegateConfig();
+  assert.equal(defaults.profiles, BUNDLED_PROFILES);
+  assert.equal(defaults.background, false);
+  assert.ok(Object.isFrozen(defaults));
+  await config.write({ background: true });
+  assert.equal(loadDelegateConfig().background, true);
+});
+
+test("background-only config accepts both booleans and preserves profiles", async (t) => {
+  const config = await backgroundConfig(t);
+  for (const background of [true, false]) {
+    await config.write({ background });
+    const effective = loadDelegateConfig(config.path);
+    assert.equal(effective.background, background);
+    assert.deepEqual(effective.profiles, BUNDLED_PROFILES);
+    assert.ok(Object.isFrozen(effective));
+    assert.ok(Object.isFrozen(effective.profiles));
+    assert.deepEqual(loadDelegateProfiles(config.path), BUNDLED_PROFILES);
+  }
+  await config.write({ profiles: {} });
+  assert.equal(loadDelegateConfig(config.path).background, false);
+});
+
+test("project layers inherit or override background and profiles independently", async (t) => {
+  const user = await backgroundConfig(t);
+  const project = await backgroundConfig(t);
+  await user.write({ background: true, profiles: { oracle: null } });
+  const userConfig = loadDelegateConfig(user.path);
+  assert.equal(loadDelegateConfig(project.path, userConfig), userConfig);
+
+  await project.write({ profiles: { scout: null } });
+  const inherited = loadDelegateConfig(project.path, userConfig);
+  assert.equal(inherited.background, true);
+  assert.equal(Object.hasOwn(inherited.profiles, "oracle"), false);
+  assert.equal(Object.hasOwn(inherited.profiles, "scout"), false);
+  assert.equal(Object.hasOwn(userConfig.profiles, "scout"), true);
+
+  await project.write({ background: false });
+  const overridden = loadDelegateConfig(project.path, userConfig);
+  assert.equal(overridden.background, false);
+  assert.deepEqual(overridden.profiles, userConfig.profiles);
+  assert.equal(userConfig.background, true);
+
+  await user.write({ background: false });
+  await project.write({ background: true, profiles: { worker: null } });
+  const enabled = loadDelegateConfig(project.path, loadDelegateConfig(user.path));
+  assert.equal(enabled.background, true);
+  assert.equal(Object.hasOwn(enabled.profiles, "worker"), false);
+});
+
+test("profile wrapper keeps lower-precedence and missing-file behavior", async (t) => {
+  const config = await backgroundConfig(t);
+  const lower = Object.freeze({ scout: BUNDLED_PROFILES.scout });
+  assert.equal(loadDelegateProfiles(config.path, lower), lower);
+  await config.write({ profiles: {}, background: true });
+  assert.deepEqual(loadDelegateProfiles(config.path, lower), lower);
+  await config.write({ profiles: { scout: null } });
+  assert.deepEqual(loadDelegateProfiles(config.path, lower), {});
+});
+
+test("invalid background values, unknown fields, and legacy shapes are rejected", async (t) => {
+  const config = await backgroundConfig(t);
+  const cases = [
+    ...[null, 0, 1, "true", "false", [], {}].map((background) => [
+      { background }, /"background" must be a boolean/,
+    ]),
+    [{}, /legacy or incomplete format/],
+    [{ scout: { model: "legacy" } }, /legacy or incomplete format/],
+    [{ background: true, extra: false }, /unknown top-level field/],
+    [{ profiles: {}, extra: false }, /unknown top-level field/],
+    [{ background: true, scout: null }, /unknown top-level field/],
+    [{ background: true, profiles: null }, /"profiles" must be an object/],
+    [{ background: false, profiles: [] }, /"profiles" must be an object/],
+    [{ background: true, profiles: { custom: {} } }, /incomplete; missing/],
+  ];
+  for (const [value, expected] of cases) {
+    await config.write(value);
+    for (const load of [loadDelegateConfig, loadDelegateProfiles]) {
+      assert.throws(() => load(config.path), (error) => {
+        assert.ok(error.message.includes(config.path));
+        assert.match(error.message, expected);
+        assert.match(error.message, /Corrective action:/);
+        return true;
+      });
+    }
   }
 });
 

@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.mjs"
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.mjs"
   },
   "pi": {
     "extensions": [
