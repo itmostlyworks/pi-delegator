@@ -287,6 +287,9 @@ function registerDelegateTool(
     promptSnippet: "Delegate one bounded reconnaissance, review, advisory, behavioral verification, or implementation task to a fresh context",
     promptGuidelines: [
       "Use delegate when a focused reconnaissance, review, advisory, behavioral verification, or implementation task benefits from a fresh bounded context.",
+      ...(background ? [
+        'When background delegation is enabled, consider starting independent tasks with action: "start" so they can run concurrently while you continue other work. Collect each result with action: "wait" when needed; keep dependent tasks sequential.',
+      ] : []),
     ],
     parameters: DelegateParameters,
 

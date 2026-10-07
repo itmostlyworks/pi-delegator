@@ -1111,6 +1111,17 @@ test("background is opt-in and the default closed schema is unchanged", async ()
   assert.equal(enabled.parameters.properties.runId.maxLength, 64);
 });
 
+test("background concurrency guidance is optional and only advertised when enabled", () => {
+  const implicit = registeredTool();
+  const disabled = registeredTool({ background: false });
+  const enabled = registeredTool({ background: true });
+  assert.deepEqual(disabled.promptGuidelines, implicit.promptGuidelines);
+  assert.equal(implicit.promptGuidelines.length, 1);
+  assert.deepEqual(enabled.promptGuidelines.slice(0, -1), implicit.promptGuidelines);
+  assert.equal(enabled.promptGuidelines.at(-1),
+    'When background delegation is enabled, consider starting independent tasks with action: "start" so they can run concurrently while you continue other work. Collect each result with action: "wait" when needed; keep dependent tasks sequential.');
+});
+
 test("only trusted parent project config may enable or disable background delegation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-delegator-background-trust-"));
   try {
