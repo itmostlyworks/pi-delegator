@@ -66,18 +66,21 @@ model-facing start response retains retrieval instructions. Failure notification
 identify the run and render directly from saved details. There is no availability
 observer or UI UUID machinery, dashboard, or persistent registry.
 
-Settlement observers are separate from wait progress subscriptions. Observers
-cannot change lifecycle or billing. Settlement, collection, cancellation, and
-closure release the applicable observers, subscriptions, and timers; a cancelled
+Settlement observers are separate from wait progress subscriptions. Independent
+renderer subscriptions do not replace one another (including HTML export).
+Cards retain their callbacks; the registry observes them weakly so abandoned
+export contexts can be collected without waiting for the run to finish.
+Observers cannot change lifecycle or billing. Settlement, collection, cancellation,
+and closure release the applicable observers, subscriptions, and timers; a cancelled
 wait remains retryable even if cancellation races with settlement. Cancellation
 wording identifies the run and explains that waiting stopped, the delegate was
 not cancelled, and another wait can collect its result.
 
 Before switch, fork, or tree navigation, handlers cancel owned runs, await bounded
 runner finalization, and clear the registry. They reopen it in case another
-extension cancels navigation. Shutdown closes it permanently; a new session gets
-a fresh registry. Closure suppresses ordinary cancellation notifications but
-still reports cleanup and other failures. Cleanup does not require a useful-work
+extension cancels navigation. Shutdown closes it permanently, even when it overlaps
+navigation cleanup; a new session gets a fresh registry. Closure suppresses ordinary
+cancellation notifications but still reports cleanup and other failures. Cleanup does not require a useful-work
 deadline. There is no persistence, resume, or broader orchestration.
 
 ## Launch and child contract

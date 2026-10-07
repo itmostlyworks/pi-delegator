@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { BackgroundRuns, MAX_BACKGROUND_RUNS } from "../src/background.ts";
 
@@ -242,6 +243,74 @@ test("close reports cleanup failures once but suppresses ordinary cancellation",
   for (const id of [reportedId, ...ids]) await assert.rejects(runs.wait(id), /Unknown or already collected/);
 });
 
+for (const closeFirst of [false, true]) {
+  test(`permanent close wins overlapping cancelAll (${closeFirst ? "close first" : "cancel first"})`, async () => {
+    const work = deferred();
+    const runs = new BackgroundRuns(() => false, () => {});
+    runs.start(() => work.promise);
+    await tick();
+    const first = closeFirst ? runs.close() : runs.cancelAll();
+    const second = closeFirst ? runs.cancelAll() : runs.close();
+    assert.throws(() => runs.start(async () => "early"), /session is closing/);
+    work.resolve("cancelled");
+    await Promise.all([first, second]);
+    await runs.cancelAll();
+    assert.throws(() => runs.start(async () => "late"), /session is closing/);
+  });
+}
+
+test("concurrent cancelAll shares reopening and cannot reopen a newer cancellation", async () => {
+  const work = deferred();
+  const nextWork = deferred();
+  const runs = new BackgroundRuns(() => false, () => {});
+  runs.start(() => work.promise);
+  await tick();
+  const first = runs.cancelAll();
+  const second = runs.cancelAll();
+  assert.equal(first, second);
+  let nextCancellation;
+  const restarted = first.then(() => {
+    runs.start(() => nextWork.promise);
+    nextCancellation = runs.cancelAll();
+  });
+  try {
+    assert.throws(() => runs.start(async () => "early"), /session is closing/);
+    work.resolve("cancelled");
+    await second;
+    await restarted;
+    assert.throws(() => runs.start(async () => "still closing"), /session is closing/);
+    nextWork.resolve("cancelled");
+    await nextCancellation;
+    const id = runs.start(async () => "reopened");
+    assert.equal(await runs.wait(id), "reopened");
+  } finally {
+    work.resolve("cancelled");
+    nextWork.resolve("cancelled");
+    await runs.close();
+  }
+});
+
+for (const cancelWait of [false, true]) {
+  test(`close ${cancelWait ? "reports a cancelled wait's" : "does not duplicate an active wait's"} failure`, async () => {
+    const work = deferred();
+    const reports = [];
+    const runs = new BackgroundRuns(() => true, (...args) => reports.push(args), () => true);
+    const id = runs.start(() => work.promise);
+    const controller = new AbortController();
+    const waiting = runs.wait(id, controller.signal);
+    await tick();
+    const closing = runs.close();
+    if (cancelWait) {
+      controller.abort();
+      await assert.rejects(waiting, /Stopped waiting/);
+    }
+    work.resolve("cleanup failure");
+    if (!cancelWait) assert.equal(await waiting, "cleanup failure");
+    await closing;
+    assert.deepEqual(reports, cancelWait ? [[id, "cleanup failure"]] : []);
+  });
+}
+
 test("cancelAll waits for cleanup then reopens the same registry without session_start", async () => {
   const reports = [];
   const runs = new BackgroundRuns(() => true, (...args) => reports.push(args));
@@ -437,7 +506,8 @@ test("throwing settlement observers cannot affect failure reporting or collectio
   const id = runs.start(() => work.promise);
   let calls = 0;
   try {
-    runs.observe(id, () => { calls += 1; throw new Error("observer"); });
+    runs.observe(id, () => { throw new Error("observer"); });
+    runs.observe(id, () => { calls += 1; });
     t.mock.timers.tick(1000);
     work.resolve("failure");
     await tick();
@@ -452,7 +522,123 @@ test("throwing settlement observers cannot affect failure reporting or collectio
   }
 });
 
-test("replacement and unsubscribe leave only the current observation owner", async (t) => {
+test("weak subscriptions retain exact callback identity and unsubscribe independently", async () => {
+  const work = deferred();
+  const runs = new BackgroundRuns(() => false, () => {});
+  const id = runs.start(() => work.promise);
+  const snapshots = [];
+  const observer = (snapshot) => snapshots.push(snapshot);
+  const observers = runs.runs.get(id).observers;
+  try {
+    const first = runs.observe(id, observer, { weak: true });
+    const current = runs.observe(id, observer, { weak: true });
+    const slots = [...observers];
+    assert.equal(slots.length, 2);
+    assert.notEqual(slots[0], slots[1]);
+    for (const slot of slots) {
+      assert.ok(slot instanceof WeakRef);
+      assert.equal(slot.deref(), observer, "weak reference targets the owner-held callback, not a wrapper");
+    }
+    first();
+    first();
+    assert.deepEqual([...observers], [slots[1]]);
+    work.resolve("done");
+    assert.equal(await runs.wait(id), "done");
+    assert.deepEqual(snapshots, [{ metadata: undefined, settled: true, value: "done" }]);
+    assert.equal(observers.size, 0, "settlement clears slots without relying on GC");
+    current();
+    current();
+  } finally {
+    work.resolve("done");
+    await runs.close();
+  }
+});
+
+for (const terminal of ["settlement", "rejection", "cancelAll", "close"]) {
+  test(`weak observation is dereferenced once and eagerly cleared on ${terminal}`, async (t) => {
+    const work = deferred();
+    const runs = new BackgroundRuns(() => false, () => {});
+    const id = runs.start(async () => {
+      await work.promise;
+      if (terminal === "rejection") throw new Error("unexpected");
+      return "done";
+    });
+    const snapshots = [];
+    const live = (snapshot) => snapshots.push(snapshot);
+    const missing = () => { throw new Error("missing callback ran"); };
+    runs.observe(id, missing, { weak: true });
+    runs.observe(id, live, { weak: true });
+    const observers = runs.runs.get(id).observers;
+    const [missingSlot, liveSlot] = [...observers];
+    const missingDeref = t.mock.method(missingSlot, "deref", () => undefined);
+    const liveDeref = t.mock.method(liveSlot, "deref");
+    try {
+      let cleanup;
+      if (terminal === "cancelAll") cleanup = runs.cancelAll();
+      if (terminal === "close") cleanup = runs.close();
+      work.resolve();
+      await cleanup;
+      await tick();
+      assert.equal(missingDeref.mock.callCount(), 1);
+      assert.equal(liveDeref.mock.callCount(), 1);
+      assert.equal(snapshots.length, 1);
+      assert.equal(snapshots[0].settled, terminal === "settlement" || terminal === "rejection");
+      assert.equal(observers.size, 0, "all slots clear synchronously on the lifecycle notification");
+    } finally {
+      work.resolve();
+      await runs.close();
+    }
+  });
+}
+
+test("abandoned weak callbacks are reclaimed while live weak and default strong callbacks survive", () => {
+  const probe = spawnSync(process.execPath, ["--experimental-strip-types", "--expose-gc", "--input-type=module", "-e", `
+    import assert from "node:assert/strict";
+    import { BackgroundRuns } from ${JSON.stringify(new URL("../src/background.ts", import.meta.url).href)};
+    const tick = () => new Promise((resolve) => setImmediate(resolve));
+    const runs = new BackgroundRuns(() => false, () => {});
+    let finish;
+    const id = runs.start(() => new Promise((resolve) => { finish = resolve; }));
+    let liveCalls = 0;
+    let strongCalls = 0;
+    const live = () => { liveCalls += 1; };
+    runs.observe(id, live, { weak: true });
+    runs.observe(id, () => { strongCalls += 1; });
+    const abandoned = (() => {
+      const context = { payload: new Uint8Array(1024) };
+      const callback = () => { throw new Error(String(context.payload.length)); };
+      return {
+        callback: new WeakRef(callback),
+        context: new WeakRef(context),
+        unsubscribe: runs.observe(id, callback, { weak: true }),
+      };
+    })();
+    const observers = runs.runs.get(id).observers;
+    let reclaimed = false;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      await tick();
+      globalThis.gc();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (!abandoned.callback.deref() && !abandoned.context.deref() && observers.size === 2) {
+        reclaimed = true;
+        break;
+      }
+    }
+    assert.ok(reclaimed, "abandoned callback/context reclaimed and slot pruned during an active run");
+    assert.equal([...observers].find((slot) => slot instanceof WeakRef).deref(), live);
+    abandoned.unsubscribe();
+    finish("done");
+    await runs.wait(id);
+    assert.equal(liveCalls, 1);
+    assert.equal(strongCalls, 1);
+    assert.equal(observers.size, 0);
+    await runs.close();
+  `], { encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 });
+  assert.ifError(probe.error);
+  assert.equal(probe.status, 0, probe.stderr || probe.stdout);
+});
+
+test("independent renderer subscriptions and stale unsubscribe preserve live observation", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const work = deferred();
   const runs = new BackgroundRuns(() => false, () => {});
@@ -461,17 +647,18 @@ test("replacement and unsubscribe leave only the current observation owner", asy
   let calls = 0;
   const observer = () => { calls += 1; };
   try {
-    const old = runs.observe(id, () => { oldCalls += 1; });
+    runs.observe(id, () => { oldCalls += 1; });
     const first = runs.observe(id, observer);
     const current = runs.observe(id, observer);
-    old();
+    first();
     first();
     t.mock.timers.tick(1000);
     assert.equal(oldCalls, 0);
-    assert.equal(calls, 0, "no heartbeat for replacement observers");
+    assert.equal(calls, 0, "no heartbeat for renderer observers");
     work.resolve("done");
     await runs.wait(id);
-    assert.equal(calls, 1, "stale unsubscribe cannot remove same-callback replacement");
+    assert.equal(oldCalls, 1, "another renderer cannot steal the live subscription");
+    assert.equal(calls, 1, "stale unsubscribe cannot remove same-callback subscription");
     current();
     current();
     const unsubscribed = runs.start(async () => "done");
@@ -505,6 +692,7 @@ for (const method of ["close", "cancelAll"]) {
       calls += 1;
       assert.equal(runs.snapshot(id), undefined, "closure redraw sees inactive state");
     });
+    runs.observe(id, () => { calls += 1; });
     let waitCalls = 0;
     const waiting = runs.wait(id, undefined, () => { waitCalls += 1; });
     assert.equal(waitCalls, 1);
@@ -513,7 +701,7 @@ for (const method of ["close", "cancelAll"]) {
     try {
       t.mock.timers.tick(3000);
       await tick();
-      assert.equal(calls, 1, "one inactive redraw before detaching observation");
+      assert.equal(calls, 2, "each renderer gets one inactive redraw before detaching");
       assert.equal(waitCalls, 1, "closure detaches the wait timer before owned abort");
       assert.equal(finished, false);
       work.resolve("cancelled");
@@ -521,7 +709,7 @@ for (const method of ["close", "cancelAll"]) {
       assert.equal(await waiting, "cancelled");
       t.mock.timers.tick(3000);
       assert.equal(waitCalls, 1);
-      assert.equal(calls, 1, "no late notifications");
+      assert.equal(calls, 2, "no late notifications");
       assert.equal(runs.snapshot(id), undefined);
     } finally {
       work.resolve("cancelled");

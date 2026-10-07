@@ -6,6 +6,25 @@ export interface BackgroundSnapshot<T, M> {
   value?: T;
 }
 
+type Observer<T, M> = (snapshot: BackgroundSnapshot<T, M>) => void;
+type ObserverSlot<T, M> = Observer<T, M> | WeakRef<Observer<T, M>>;
+
+// Holdings never retain a callback, renderer context, or run. Lifecycle cleanup
+// unregisters eagerly; GC only prunes subscriptions abandoned by their owners.
+const observerFinalizers = new FinalizationRegistry<{
+  observers: Set<unknown>;
+  slot: WeakRef<object>;
+}>(({ observers, slot }) => { observers.delete(slot); });
+
+function unsubscribeObserver<T, M>(observers: Set<ObserverSlot<T, M>>, slot: ObserverSlot<T, M>): () => void {
+  // Keep this closure outside observe: it owns only the set and slot, not the run
+  // or observe's callback argument (which must remain weak for weak subscribers).
+  return () => {
+    observers.delete(slot);
+    if (slot instanceof WeakRef) observerFinalizers.unregister(slot);
+  };
+}
+
 interface Run<T, M> {
   readonly metadata: M | undefined;
   readonly controller: AbortController;
@@ -14,7 +33,8 @@ interface Run<T, M> {
   settled: boolean;
   value?: T;
   reported: boolean;
-  observer?: (snapshot: BackgroundSnapshot<T, M>) => void;
+  collected: boolean;
+  readonly observers: Set<ObserverSlot<T, M>>;
   waitingTimer?: ReturnType<typeof setInterval>;
 }
 
@@ -24,6 +44,8 @@ export class BackgroundRuns<T, M = undefined> {
   private nextRunId = 1n;
   private closed = false;
   private closing: Promise<void> | undefined;
+  private permanentlyClosed = false;
+  private cancelling: Promise<void> | undefined;
 
   private readonly isFailure: (value: T) => boolean;
   private readonly report: (id: string, value: T) => void;
@@ -50,7 +72,8 @@ export class BackgroundRuns<T, M = undefined> {
     const run: Run<T, M> = {
       metadata,
       controller, promise: Promise.resolve().then(() => work(controller.signal)),
-      waiting: false, settled: false, reported: false,
+      waiting: false, settled: false, reported: false, collected: false,
+      observers: new Set(),
     };
     this.runs.set(id, run);
     // Both branches are handled immediately, even when nobody calls wait.
@@ -76,16 +99,19 @@ export class BackgroundRuns<T, M = undefined> {
     return run ? this.runSnapshot(run) : undefined;
   }
 
-  observe(id: string, observer: (snapshot: BackgroundSnapshot<T, M>) => void): () => void {
+  observe(id: string, observer: Observer<T, M>, options?: { weak?: boolean }): () => void {
     const run = this.runs.get(id);
     if (!run || run.settled || this.closed) return () => {};
-    this.clearObservation(run);
-    const observation = (snapshot: BackgroundSnapshot<T, M>) => observer(snapshot);
-    run.observer = observation;
-    return () => {
-      // A stale unsubscribe must not detach a replacement, even with the same callback.
-      if (run.observer === observation) this.clearObservation(run);
-    };
+    // Each subscription has its own identity, even with the same callback.
+    // Weak subscribers must retain this exact callback, not a wrapper.
+    const slot: ObserverSlot<T, M> = options?.weak
+      ? new WeakRef(observer)
+      : (snapshot) => observer(snapshot);
+    run.observers.add(slot);
+    if (slot instanceof WeakRef) {
+      observerFinalizers.register(observer, { observers: run.observers, slot }, slot);
+    }
+    return unsubscribeObserver(run.observers, slot);
   }
 
   private runSnapshot(run: Run<T, M>): BackgroundSnapshot<T, M> {
@@ -97,11 +123,23 @@ export class BackgroundRuns<T, M = undefined> {
   }
 
   private notify(run: Run<T, M>): void {
-    try { run.observer?.(this.runSnapshot(run)); } catch { /* Observers do not own lifecycle. */ }
+    const snapshot = this.runSnapshot(run);
+    for (const slot of run.observers) {
+      const observer = slot instanceof WeakRef ? slot.deref() : slot;
+      if (!observer) {
+        run.observers.delete(slot);
+        observerFinalizers.unregister(slot);
+        continue;
+      }
+      try { observer(snapshot); } catch { /* Observers do not own lifecycle. */ }
+    }
   }
 
   private clearObservation(run: Run<T, M>): void {
-    delete run.observer;
+    for (const slot of run.observers) {
+      if (slot instanceof WeakRef) observerFinalizers.unregister(slot);
+    }
+    run.observers.clear();
   }
 
   private clearWaitingTimer(run: Run<T, M>): void {
@@ -142,6 +180,7 @@ export class BackgroundRuns<T, M = undefined> {
       const value = await Promise.race([run.promise, cancelled]);
       if (signal?.aborted) throw new Error(`Stopped waiting for delegate ${id}; delegate not cancelled. Wait again to get the result.`);
       this.clearObservation(run);
+      run.collected = true;
       this.runs.delete(id);
       return value;
     } finally {
@@ -153,6 +192,11 @@ export class BackgroundRuns<T, M = undefined> {
   }
 
   close(): Promise<void> {
+    this.permanentlyClosed = true;
+    return this.closeRuns();
+  }
+
+  private closeRuns(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
     const runs = [...this.runs.entries()];
@@ -168,7 +212,7 @@ export class BackgroundRuns<T, M = undefined> {
       const outcomes = await Promise.allSettled(runs.map(([, run]) => run.promise));
       for (const [index, outcome] of outcomes.entries()) {
         const [id, run] = runs[index]!;
-        if (outcome.status === "fulfilled" && !run.reported && this.reportOnClose(outcome.value)) {
+        if (outcome.status === "fulfilled" && !run.collected && !run.waiting && !run.reported && this.reportOnClose(outcome.value)) {
           run.reported = true;
           try { this.report(id, outcome.value); } catch { /* Diagnostic observers only. */ }
         }
@@ -179,9 +223,16 @@ export class BackgroundRuns<T, M = undefined> {
   }
 
   /** Pre-navigation can be cancelled by another extension: keep this session usable. */
-  async cancelAll(): Promise<void> {
-    await this.close();
-    this.closing = undefined;
-    this.closed = false;
+  cancelAll(): Promise<void> {
+    if (this.permanentlyClosed) return this.closeRuns();
+    if (this.cancelling) return this.cancelling;
+    this.cancelling = this.closeRuns().then(() => {
+      if (!this.permanentlyClosed) {
+        this.closing = undefined;
+        this.closed = false;
+      }
+      this.cancelling = undefined;
+    });
+    return this.cancelling;
   }
 }

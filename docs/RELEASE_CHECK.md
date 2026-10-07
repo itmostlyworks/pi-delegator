@@ -38,6 +38,16 @@ Automated checks on Linux, without provider calls:
 
 Coverage includes grouped parallel foreground/background counts, listing every active profile without an overflow counter, wait cancellation without double-counting, settlement and failure cleanup, navigation/shutdown cleanup and cancelled-navigation reuse, stale-session isolation, terminal-safe labels, the built-in footer's `dim` theme color, non-TUI modes, and throwing UI observers. Live Pi footer rendering remains unverified.
 
+## Background review fixes (current branch)
+
+Automated checks on Linux, without provider calls:
+
+- `npm run typecheck` — exit 0.
+- `npm test` — exit 0; 194 passed.
+- `git diff --check` — exit 0.
+
+Regression coverage verifies that permanent shutdown wins overlapping navigation cleanup, concurrent navigation cleanup cannot reopen early, collected failures are not also reported as uncollected, cancelled waiters leave failures reportable, and independent HTML-export-style rendering cannot displace an interactive start card's settlement observer in either rendering order. Weak subscriptions and an isolated GC probe cover abandoned export callback collection while preserving live callbacks. Actual live Pi export/TUI interaction remains unverified.
+
 ## Reproduce
 
 Use the [smoke-test guide](SMOKE_TEST.md). Automated checks and coverage expectations are in the [testing guide](IMPLEMENTATION.md).

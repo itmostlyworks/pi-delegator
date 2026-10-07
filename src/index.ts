@@ -21,7 +21,7 @@ import {
   normalizeModelSelector,
 } from "./config.ts";
 import type { UsageSummary } from "./protocol.ts";
-import { BackgroundRuns } from "./background.ts";
+import { BackgroundRuns, type BackgroundSnapshot } from "./background.ts";
 import { DelegateStatus } from "./status.ts";
 import {
   runDelegate,
@@ -93,7 +93,7 @@ interface BackgroundMetadata {
 }
 
 interface StartCardState {
-  observing?: boolean;
+  observer?: (snapshot: BackgroundSnapshot<BackgroundOutcome, BackgroundMetadata>) => void;
   summary?: { status: "Completed" | "Failed"; durationMs: number };
 }
 
@@ -500,13 +500,14 @@ function registerDelegateTool(
           };
         };
         if (snapshot?.settled) saveSummary(snapshot.value);
-        if (state && snapshot && !snapshot.settled && !state.observing && typeof context.invalidate === "function") {
-          state.observing = true;
-          runs.observe(runId, (next) => {
+        if (state && (!snapshot || snapshot.settled)) delete state.observer;
+        if (state && snapshot && !snapshot.settled && !state.observer && typeof context.invalidate === "function") {
+          state.observer = (next) => {
             if (next.settled) saveSummary(next.value);
-            if (next.settled || runs.snapshot(runId) === undefined) delete state.observing;
+            if (next.settled || runs.snapshot(runId) === undefined) delete state.observer;
             context.invalidate();
-          });
+          };
+          runs.observe(runId, state.observer, { weak: true });
         }
         const label = compactDisplayText(profileLabel(details.agent, details.displayName), 64);
         const summary = state?.summary;

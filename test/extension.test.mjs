@@ -1443,6 +1443,44 @@ function liveStartCard(tool, result, toolCallId, throwOnInvalidate = false, args
   return { frames, draw, state: renderContext.state };
 }
 
+for (const exportFirst of [false, true]) {
+  test(`HTML-export-style rendering preserves live start observation (export first=${exportFirst})`, async () => {
+    await withBackgroundFixture("clean", async ({ tool }) => {
+      const args = { action: "start", agent: "scout",
+        task: JSON.stringify({ label: "exported", activity: false, finishMs: 650 }) };
+      const start = await tool.execute("exported-start", args,
+        undefined, undefined, context(process.cwd()));
+      // Pi's HTML exporter supplies independent state and a no-op invalidation.
+      const exportContexts = [];
+      const exportCard = () => {
+        const exportContext = { toolCallId: "exported-start", args, state: {}, invalidate() {} };
+        exportContexts.push(exportContext);
+        for (const expanded of [false, true]) {
+          const exported = renderText(tool.renderResult(start,
+            { expanded, isPartial: false }, plainTheme, exportContext));
+          assert.match(exported, / · Started$/);
+        }
+      };
+      if (exportFirst) exportCard();
+      const card = liveStartCard(tool, start, "exported-start", false, args);
+      for (let i = 0; i < 10; i++) exportCard();
+      const result = await tool.execute("exported-wait", { action: "wait", runId: start.details.runId },
+        undefined, undefined, context(process.cwd()));
+      assert.equal(result.content[0].text, "exported complete");
+      assert.equal(card.frames.length, 2, "interactive card receives settlement despite exports");
+      assert.equal(card.state.summary.status, "Completed");
+      assert.equal(card.state.observer, undefined);
+      for (const exportContext of exportContexts) {
+        assert.equal(exportContext.state.summary.status, "Completed");
+        assert.equal(exportContext.state.observer, undefined);
+      }
+      const retained = card.draw();
+      assert.match(retained.collapsed, / · Completed · \d+(?:\.\d+)?(?:ms|s)$/);
+      assert.doesNotMatch(retained.collapsed, /inactive/);
+    }, { PI_DELEGATOR_PI_BINARY: resolve("test/fixtures/heartbeat-pi.mjs") });
+  });
+}
+
 test("static starts redraw only on settlement while parallel active and silent waits own foreground progress", async () => {
   await withBackgroundFixture("clean", async ({ tool }) => {
     await trackWaitIntervals(async ({ active, created, periods }) => {
