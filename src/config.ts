@@ -53,6 +53,7 @@ const PROFILE_FIELDS = [...REQUIRED_PROFILE_FIELDS, "deadlineMs", "displayName"]
 const PROFILE_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
 const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/u;
 const REMOTE_CAPABILITY_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:/u;
+const BUILTIN_EXTENSIONS = new Set(["builtin:codemode", "builtin:tool-search", "builtin:mcp"]);
 const EXTENSION_FILE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 const DELEGATOR_EXTENSION_PATH = realpathSync(fileURLToPath(new URL("./index.ts", import.meta.url)));
 const DELEGATOR_EXTENSION_IDENTITY = statSync(DELEGATOR_EXTENSION_PATH);
@@ -172,6 +173,26 @@ function parseCapabilities(
       );
     }
     const setting = configuredPath.trim();
+    if (field === "extensions" && setting.startsWith("builtin:")) {
+      if (!BUILTIN_EXTENSIONS.has(setting)) {
+        throw profileError(
+          path,
+          profileName,
+          `extensions contains unsupported builtin ${JSON.stringify(setting)}`,
+          "use builtin:codemode, builtin:tool-search, builtin:mcp, or a local extension file",
+        );
+      }
+      if (capabilities.includes(setting)) {
+        throw profileError(
+          path,
+          profileName,
+          `extensions contains duplicate builtin ${JSON.stringify(setting)}`,
+          "remove duplicate builtin extension IDs",
+        );
+      }
+      capabilities.push(setting);
+      continue;
+    }
     if (REMOTE_CAPABILITY_PATTERN.test(setting)) {
       throw profileError(
         path,

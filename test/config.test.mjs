@@ -339,6 +339,77 @@ test("resolves, validates, and freezes explicit local capability paths", async (
   }
 });
 
+test("preserves and freezes mixed opt-in builtin IDs and canonical local extensions", async () => {
+  const fixture = await temporaryConfig();
+  try {
+    await writeFile(
+      fixture.path,
+      JSON.stringify({
+        profiles: {
+          custom: completeProfile({
+            extensions: ["builtin:codemode", "./extension.ts", "builtin:tool-search", "builtin:mcp"],
+          }),
+        },
+      }),
+    );
+    const profile = loadDelegateProfiles(fixture.path).custom;
+    assert.deepEqual(profile.extensions, [
+      "builtin:codemode",
+      await realpath(fixture.extension),
+      "builtin:tool-search",
+      "builtin:mcp",
+    ]);
+    assert.equal(Object.isFrozen(profile.extensions), true);
+    assert.deepEqual(profile.skills, []);
+    for (const bundled of Object.values(BUNDLED_PROFILES)) assert.deepEqual(bundled.extensions, []);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("rejects duplicate builtin IDs and local extension aliases even in mixed lists", async () => {
+  const fixture = await temporaryConfig();
+  try {
+    await symlink(fixture.extension, join(fixture.directory, "extension-alias.ts"));
+    const cases = [
+      ...["builtin:codemode", "builtin:tool-search", "builtin:mcp"].map((id) => [
+        [id, "extension.ts", ` ${id} `],
+        /extensions contains duplicate builtin/,
+      ]),
+      [["extension.ts", "builtin:mcp", "./extension.ts"], /extensions contains duplicate path/],
+      [["extension.ts", "builtin:codemode", "extension-alias.ts"], /extensions contains duplicate path/],
+    ];
+    for (const [extensions, expected] of cases) {
+      await writeFile(fixture.path, JSON.stringify({ profiles: { custom: completeProfile({ extensions }) } }));
+      assertConfigError(() => loadDelegateProfiles(fixture.path), fixture.path, "custom", expected);
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("rejects unknown builtin IDs, wildcards, and builtin skills", async () => {
+  const fixture = await temporaryConfig();
+  try {
+    const cases = [
+      ...["builtin:unknown", "builtin:*", "builtin:", "builtin:CodeMode", "builtin:mcp:extra"].map((id) => [
+        { extensions: ["extension.ts", id] },
+        /extensions contains unsupported builtin/,
+      ]),
+      ...["builtin:codemode", "builtin:tool-search", "builtin:mcp"].map((id) => [
+        { skills: [id] },
+        /skills path .* is not a supported local filesystem path/,
+      ]),
+    ];
+    for (const [overrides, expected] of cases) {
+      await writeFile(fixture.path, JSON.stringify({ profiles: { custom: completeProfile(overrides) } }));
+      assertConfigError(() => loadDelegateProfiles(fixture.path), fixture.path, "custom", expected);
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("rejects duplicate capability aliases and explicit pi-delegator loading", async () => {
   const fixture = await temporaryConfig();
   try {

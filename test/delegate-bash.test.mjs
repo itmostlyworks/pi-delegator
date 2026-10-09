@@ -11,8 +11,8 @@ const ops = createDelegateBashOperations((code) => {
 const cwd = process.cwd();
 const options = (onData, timeout) => ({ onData, timeout, env: process.env });
 
-// Exercise the installed adapter as well as the operations: only thrown errors
-// (not an isError return field) are surfaced as recoverable tool failures.
+// Exercise the installed adapter as well as the operations: Pi 1.1 returns
+// structured nonzero-exit errors and throws for command timeouts.
 test("timeout returns an ordinary Pi tool error and a later command succeeds", async () => {
   const tool = createBashTool(cwd, { operations: ops });
   await assert.rejects(tool.execute("first", { command: "sleep 10", timeout: 0.08 }),
@@ -45,8 +45,9 @@ test("timeout does not terminate a prior command's background job", async () => 
 
 test("ordinary nonzero exit remains recoverable", async () => {
   const tool = createBashTool(cwd, { operations: ops });
-  await assert.rejects(tool.execute("first", { command: "printf bad; exit 7" }),
-    /bad[\s\S]*Command exited with code 7/);
+  const failed = await tool.execute("first", { command: "printf bad; exit 7" });
+  assert.equal(failed.isError, true);
+  assert.match(failed.content[0].text, /bad[\s\S]*Command exited with code 7/);
   assert.match((await tool.execute("second", { command: "echo good" })).content[0].text, /good/);
 });
 

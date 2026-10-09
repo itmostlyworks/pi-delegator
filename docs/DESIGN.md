@@ -23,6 +23,8 @@ fixtures and lifecycle coverage; observed results live in [RELEASE_CHECK.md](REL
 | `src/process-tree.ts` | Session identity capture, bounded process queries, whole-session group cleanup, and command-local PGID cleanup. |
 | `src/protocol.ts` | Incremental bounded JSONL parsing, terminal candidates, retry/continuation state, diagnostics, and usage. |
 | `src/delegate-bash-extension.ts` | Private child Bash override with job isolation, handshake, timeout recovery, and bounded drainage. |
+| `src/delegate-mcp-extension.ts` | Opt-in native MCP extension with a delegate-owned transport factory. |
+| `src/delegate-mcp-transport.ts` | Session-contained stdio MCP servers, bounded protocol buffers, and idempotent group cleanup. |
 | `src/delegate-child-contract.ts` | Private child environment marker and reserved lifecycle exit codes. |
 | `src/display.ts` | Terminal-safe compact previews and observational tool/activity summaries. |
 | `src/status.ts` | Session-local, event-driven active delegate footer counts; no lifecycle ownership. |
@@ -100,8 +102,11 @@ Python runs with `-I -S`. Process queries cap output at 1 MiB and time at 500 ms
 
 Pi runs with `--mode json --print --no-session --no-extensions --no-skills`,
 explicit tools, model, thinking level, and `--append-system-prompt`.
-Only validated explicit local skills/extensions are added. Bash-enabled profiles
-load the private Bash extension first so its registration wins tool-name conflicts.
+Only validated explicit local skills/extensions and supported built-in identifiers
+are added. Codemode and tool-search identifiers pass through to Pi; `builtin:mcp`
+is translated to the private MCP adapter instead of Pi's detached transport.
+Bash-enabled profiles load the private Bash extension first so its registration
+wins tool-name conflicts, including nested codemode calls.
 The environment is inherited with the private child marker overwritten;
 stdout/stderr are piped. Parent sessions and ambient capabilities are not passed.
 Pi's normal coding prompt and project instructions remain active.
@@ -125,6 +130,34 @@ Bash settles on pipe close or a fixed 100 ms post-exit drain, clears timers and
 listeners, and destroys streams. Continuous output cannot extend this wait.
 The registration marker is removed from command environments, not used as a
 security boundary. There are no package-imposed fast-command deadlines.
+
+## MCP transport ownership
+
+MCP is opt-in and uses Pi's public `createMcpExtension({ createTransport })` hook.
+Pi owns server configuration, trust, discovery, exposure, resources, and authentication;
+the adapter owns transport construction. HTTP uses the public streamable HTTP
+transport and native authentication provider. Its public library entry is resolved
+relative to Pi's host API installation rather than the extension's dependency copy,
+so native HTTP retry/session/auth error checks share the same constructors. The
+adapter targets the Node.js Pi distribution. Environment/header templates resolve
+asynchronously; `!command` uses the private Bash operations with bounded execution
+and captured output. Closing during resolution prevents a late server launch;
+aborting an in-flight config command ends the delegate so the parent can clean
+its session. Command-valued OAuth client secrets are rejected before HTTP startup
+because Pi resolves them synchronously inside its authentication provider.
+Local servers run through a privileged Bash supervisor with a separate
+monitor-mode job group in the delegate's existing session, not `detached: true`.
+Executable arguments are passed separately, and a private descriptor reports the
+job PGID without consuming the server's stdin/stdout protocol.
+
+Transport shutdown is idempotent and bounded. Direct-child exit and pipe closure
+cannot skip descendant cleanup. Unsafe setup or unverifiable cleanup is a terminal
+child failure so the parent can sweep the entire session. The runner's existing
+session finalizer remains authoritative during completion, cancellation, deadline,
+and child crash, including server descendants that create other same-session groups.
+No detached-server registry, parent acknowledgement protocol, or ancestry polling
+is added. Deliberate session escape and remote-server rollback remain outside the
+guarantee.
 
 ## Protocol and completion
 

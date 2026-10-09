@@ -16,7 +16,7 @@ The automated suite uses `node:test` and a fake Pi executable selected through `
 | Area | Required behavior |
 | --- | --- |
 | Registration and launch | Input/schema validation, cwd checks, model precedence, explicit isolation flags, unsupported platform and spawn diagnostics |
-| Configuration | Add/replace/disable profiles, complete definitions, bounded input, trusted-project precedence, immutable session registries, validated local capabilities; background defaults false, boolean-only validation, background-only files, independent setting/profile inheritance |
+| Configuration | Add/replace/disable profiles, complete definitions, bounded input, trusted-project precedence, immutable session registries, validated local capabilities and supported built-in identifiers; background defaults false, boolean-only validation, background-only files, independent setting/profile inheritance |
 | Profiles and display | Expected prompts/tools/thinking, optional display labels, stable identifiers, bounded progress, usage accounting |
 | Protocol | Split/chunked JSONL, unknown events, malformed/oversized lines, bounded output and stderr, assistant retries, trustworthy terminal answers |
 | Deadlines | No timer by default; configured timer covers the run, cannot be extended by recovery, and cleans up the session |
@@ -25,7 +25,8 @@ The automated suite uses `node:test` and a fake Pi executable selected through `
 | Drainage | Child exit or semantic completion cannot hang on inherited pipes, watchers, or continuous background output |
 | Bash recovery | Nonzero exits/timeouts allow continuation after verified command-local cleanup; earlier background groups survive until whole-session cleanup |
 | Cleanup failure | Unsafe containment or unverifiable cleanup is explicit; reserved child exits cannot be hidden by a terminal candidate |
-| Isolation | Private Bash registration wins over conflicting configured extensions; parallel calls share no mutable state |
+| Isolation | Private Bash registration wins over conflicting configured extensions and nested codemode calls; parallel calls share no mutable state |
+| MCP | Opt-in safe adapter selection; stdio stays in the delegate session; bounded protocol/stderr; idempotent close and cleanup after leader exit; completion/cancel/deadline remove resistant servers and same-session descendants; HTTP/config/auth parity |
 | Finalization | Bounded waits, cleared timers/listeners, no late updates, private temporary prompts removed best-effort |
 | Background schema | Opt-in closed schema; foreground unchanged; invalid action/field combinations rejected before execution |
 | Background ownership | Immediate start; monotonic session-local IDs; 32-entry cap includes settled runs; collect once; duplicate waits rejected; cancelled waits retryable |
@@ -33,6 +34,8 @@ The automated suite uses `node:test` and a fake Pi executable selected through `
 | Background observers | Settlement and wait progress are separate and observational; cancellation leaves waits retryable and identifies the run, says waiting stopped without cancelling the delegate, and advises waiting again; settlement, collection, navigation, and shutdown release applicable subscriptions/timers; starts do not redraw on collection; parallel runs remain isolated |
 | Background reporting and usage | Waiter owns failure reporting; otherwise visible non-turn-triggering diagnostics, with or without UI; usage charged once on collection |
 | Session transitions | Bounded cleanup before navigation/shutdown; cancelled navigation reopens the registry; shutdown stays closed; cleanup failures reported |
+
+Codemode/MCP checks use the actual installed Pi implementations without provider calls, alongside subprocess fixtures for transport ownership and cleanup. Recheck on macOS as well as Linux; direct-child exit alone is not cleanup evidence.
 
 Background coverage spans registry ownership and races (`test/background.test.mjs`), opt-in configuration (`test/config.test.mjs`), and tool integration with real child processes (`test/extension.test.mjs`).
 

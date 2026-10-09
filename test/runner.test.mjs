@@ -273,6 +273,36 @@ test("loads only each concurrent profile's explicit capabilities and tool allowl
   });
 });
 
+test("explicit built-ins preserve isolation and MCP uses the contained adapter", async () => {
+  await withTempDir(async (cwd) => {
+    const recordPath = join(cwd, "builtin-args.json");
+    const result = await runDelegate({
+      profile: {
+        ...WORKER_PROFILE,
+        tools: ["read", "bash", "codemode", "tool_search"],
+        extensions: ["builtin:codemode", "builtin:mcp", "builtin:tool-search"],
+      },
+      task: "Use explicit capabilities",
+      cwd,
+      env: fixtureEnv("clean", { FAKE_PI_RECORD_PATH: recordPath }),
+      cleanupGraceMs: 50,
+      exitDrainMs: 20,
+    });
+    assert.equal(result.ok, true);
+    const args = JSON.parse(await readFile(recordPath, "utf8"));
+    assert.ok(args.includes("--no-extensions"));
+    assert.ok(args.includes("--no-skills"));
+    assert.equal(args[args.indexOf("--tools") + 1], "read,bash,codemode,tool_search");
+    const extensions = args.flatMap((argument, index) =>
+      argument === "--extension" ? [args[index + 1]] : []);
+    assert.match(extensions[0], /delegate-bash-extension\.ts$/);
+    assert.equal(extensions[1], "builtin:codemode");
+    assert.match(extensions[2], /delegate-mcp-extension\.ts$/);
+    assert.equal(extensions[3], "builtin:tool-search");
+    assert.equal(args.includes("builtin:mcp"), false);
+  });
+});
+
 test("private Bash override keeps a normally completed background command in the delegate group", async () => {
   await withTempDir(async (cwd) => {
     const descendantPidPath = join(cwd, "bash-descendant.pid");

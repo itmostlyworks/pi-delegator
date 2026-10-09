@@ -36,6 +36,9 @@ const PIPE_CLOSE_VERIFY_MS = 50;
 const DELEGATE_BASH_EXTENSION_PATH = fileURLToPath(
   new URL("./delegate-bash-extension.ts", import.meta.url),
 );
+const DELEGATE_MCP_EXTENSION_PATH = fileURLToPath(
+  new URL("./delegate-mcp-extension.ts", import.meta.url),
+);
 
 function zeroNativeUsage(): Usage {
   return {
@@ -416,7 +419,11 @@ export async function runDelegate(options: RunDelegateOptions): Promise<Delegate
   if (options.profile.tools.includes("bash")) {
     childArgs.push("--extension", DELEGATE_BASH_EXTENSION_PATH);
   }
-  for (const extension of options.profile.extensions) childArgs.push("--extension", extension);
+  for (const extension of options.profile.extensions) {
+    // Native MCP detaches stdio servers into new sessions. Keep Pi's MCP behavior,
+    // but give its local servers the delegate-owned, session-contained transport.
+    childArgs.push("--extension", extension === "builtin:mcp" ? DELEGATE_MCP_EXTENSION_PATH : extension);
+  }
   if (options.model) childArgs.push("--model", options.model);
   childArgs.push(
     "--thinking",

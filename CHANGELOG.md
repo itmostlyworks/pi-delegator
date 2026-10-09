@@ -2,6 +2,16 @@
 
 All notable changes to `pi-delegator` are documented here.
 
+## Unreleased
+
+### Added
+
+- Opt-in profile support for Pi's codemode, tool-search, and native MCP integration. Local MCP servers use a session-contained transport with bounded cleanup instead of detached sessions; bundled profile defaults remain unchanged.
+
+### Changed
+
+- Requires Pi 1.1.0 or newer.
+
 ## [0.6.6] - 2026-10-03
 
 ### Fixed

@@ -8,7 +8,7 @@ A [Pi](https://github.com/earendil-works/pi-mono) extension that adds a `delegat
 pi install npm:@mostlyworks/pi-delegator
 ```
 
-Start a new Pi session. Requires an authenticated model provider, Node.js 22.19.0+, and Linux or macOS. On macOS, Python 3 must also be available as `python3` on PATH. Windows is not supported.
+Start a new Pi session. Requires Pi 1.1.0+, an authenticated model provider, Node.js 22.19.0+, and Linux or macOS. On macOS, Python 3 must also be available as `python3` on PATH. Windows is not supported.
 
 ## Demo
 
@@ -70,6 +70,19 @@ Uncollected failures produce a visible diagnostic without triggering a model tur
 ## Configuration and limits
 
 Add, replace, or disable profiles and opt into background runs in `~/.pi/agent/pi-delegator.json`. Trusted projects can override profiles and the background setting independently in `.pi/pi-delegator.json`; background defaults to `false`. Profiles configure the model, thinking level, prompt, tools, and explicit skills or extensions. Restart Pi after changes. See the [configuration reference](docs/REQUIREMENTS.md#user-profile-configuration).
+
+### Opt-in codemode and MCP
+
+Profiles can explicitly load `builtin:codemode`, `builtin:tool-search`, and `builtin:mcp` in `extensions`. Add `codemode` and/or `tool_search` to the profile's `tools` alongside its ordinary tools. For example, a complete worker profile can use:
+
+```json
+"tools": ["read", "bash", "edit", "write", "codemode", "tool_search"],
+"extensions": ["builtin:codemode", "builtin:tool-search", "builtin:mcp"]
+```
+
+MCP requires the Node.js Pi distribution. It reads Pi's user and trusted-project `mcp.json` in the delegate's working directory; it does not copy the parent's live connections. Local stdio servers use a delegate-owned transport so completion and cancellation clean them up with the delegate. HTTP calls use Pi's authentication support; cancelling a delegate does not guarantee cancellation or rollback of remote work. Command-valued OAuth client secrets (`!command`) are rejected; use an environment-variable secret instead.
+
+Bundled profiles are unchanged and do not enable these capabilities.
 
 Delegates do not inherit ambient extensions or skills. No nested delegation, saved sessions, or resume. Cancellation performs bounded cleanup of the delegate's captured process session; cleanup failures are reported. Deliberate session escape is not contained, and abrupt parent death does not guarantee cleanup. Returned output is bounded. This is not a sandbox; delegates have local system access through their allowed tools. Reviewer and tester no-edit restrictions are prompt instructions, not enforced write protection.
 

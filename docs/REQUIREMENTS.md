@@ -89,13 +89,23 @@ Required fields are `description`, `model`, `thinking`, `prompt`, `tools`, `skil
 - `prompt`: a readable, nonempty UTF-8 Markdown file, at most 64 KiB.
 - `tools`: a nonempty list of unique tool names; `delegate` is forbidden.
 - `skills`: explicit local Markdown files or directories.
-- `extensions`: explicit local JavaScript or TypeScript files.
+- `extensions`: explicit local JavaScript or TypeScript files, or `builtin:codemode`, `builtin:tool-search`, and `builtin:mcp`. Other built-in identifiers are rejected. Codemode/tool-search also need `codemode`/`tool_search` in `tools`.
 - Optional `displayName`: trimmed, nonblank, at most 256 UTF-8 bytes. Labels fall back to title-cased hyphen-separated identifiers; tool and result identifiers do not change.
 - Optional `deadlineMs`: a positive integer up to 2,147,483,647. Omission or `null` disables the overall run timer.
 
-Paths resolve relative to the configuration file. Capability paths must be readable, supported, canonicalized, and unique; remote sources and pi-delegator itself are rejected. Configuration files are bounded to 16 KiB. Invalid sources prevent registration with corrective diagnostics.
+Local paths resolve relative to the configuration file. Capability paths must be readable, supported, canonicalized, and unique; built-in identifiers must also be unique. Skills remain local-only; remote sources and pi-delegator itself are rejected. Configuration files are bounded to 16 KiB. Invalid sources prevent registration with corrective diagnostics.
 
 Configuration is immutable for a session; restart Pi after changes. Untrusted project configuration is ignored. Per-call working directories do not select configuration sources.
+
+### Codemode and MCP
+
+Requires Pi 1.1.0 or newer; the MCP adapter targets its Node.js distribution. Built-in capabilities are opt-in per profile; bundled profiles do not change and ambient extension discovery remains disabled. Codemode calls use the delegate's callable tool set, including the private Bash override when enabled.
+
+`builtin:mcp` selects a delegate-owned adapter for Pi's native MCP extension, not its detached stdio transport. Pi retains configuration, project-trust, tool exposure, resources, and authentication handling. Servers come from the child's user and trusted-project `mcp.json` plus explicitly loaded extensions; per-call `cwd` can affect native MCP project configuration, but not pi-delegator profile selection. Parent live MCP connections are not inherited.
+
+Local stdio servers stay inside the delegate's captured process session. Server transport closure uses bounded cleanup even if the direct server exits before its descendants; finalization cleans every remaining same-session group. HTTP cancellation closes local connections but does not guarantee remote cancellation or rollback. Command-valued `oauth.clientSecret` settings are rejected because Pi resolves them outside the contained asynchronous resolver; literal and environment-variable secrets remain supported. Environment/header `!command` values use contained Bash execution with a 10-second timeout and 1 MiB output bound. MCP is not read-only simply because a profile is a reviewer.
+
+Pi's MCP tools remain callable through codemode/tool-search unless the tool list includes `mcp__` names, which also filters MCP tools. Exact MCP tool names are supported; pi-delegator profile tool lists do not accept wildcard patterns. MCP resources follow Pi's native exposure rules.
 
 ## Lifecycle and results
 
