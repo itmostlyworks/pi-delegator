@@ -6,7 +6,21 @@ const start = (toolName, args = {}) => ({ type: "tool_start", toolName, args });
 const message = (text) => ({ type: "assistant_message", text });
 const state = () => ({ totalCalls: 0, recentTools: [] });
 
-test("labels expose only bounded path targets and safe bash categories", () => {
+test("bash commands preserve shell syntax while remaining compact and terminal-safe", () => {
+  assert.equal(toolStartLabel("bash", { command: "cd app &&\n pnpm test | tee result.txt" }, "/repo"), "bash cd app && pnpm test | tee result.txt");
+  assert.equal(toolStartLabel("bash", { command: "/custom/tool --flag '$VALUE'" }, "/repo"), "bash /custom/tool --flag '$VALUE'");
+  assert.equal(toolStartLabel("bash", { command: "\x1b[31mprintf\x1b[0m hi\u202e" }, "/repo"), "bash printf hi");
+  assert.equal(toolStartLabel("bash", { command: "😀".repeat(500) }, "/repo"), `bash ${"😀".repeat(240)}…`);
+  for (const args of [null, [], "command", {}, { command: 10 }, { command: " \n\t" }]) {
+    assert.equal(toolStartLabel("bash", args, "/repo"), "bash");
+  }
+  const summary = state();
+  const progress = formatProgress(start("bash", { command: "cd app && npm test" }), summary, "/repo");
+  assert.match(progress, /→ bash cd app && npm test/);
+  assert.match(renderProgress(summary, true), /→ bash cd app && npm test/);
+});
+
+test("labels expose bounded path targets and bash commands", () => {
   for (const name of ["read", "grep", "find", "ls", "edit", "write"]) {
     assert.equal(toolStartLabel(name, { path: "/repo/src/file.ts", pattern: "secret", command: "secret", content: "secret" }, "/repo"), `${name} src/file.ts`);
   }
@@ -14,8 +28,8 @@ test("labels expose only bounded path targets and safe bash categories", () => {
   assert.equal(toolStartLabel("read", { path: ".", offset: -1 }, "/repo"), "read .");
   assert.equal(toolStartLabel("grep", { pattern: "secret" }, "/repo"), "grep");
   assert.equal(toolStartLabel("unknown", { path: "secret", command: "secret" }, "/repo"), "unknown");
-  assert.equal(toolStartLabel("bash", { command: "npm test -- --runInBand" }, "/repo"), "bash(npm test)");
-  assert.equal(toolStartLabel("bash", { command: "curl -H 'Authorization: secret'" }, "/repo"), "bash");
+  assert.equal(toolStartLabel("bash", { command: "npm test -- --runInBand" }, "/repo"), "bash npm test -- --runInBand");
+  assert.equal(toolStartLabel("bash", { command: "curl -H 'Authorization: secret'" }, "/repo"), "bash curl -H 'Authorization: secret'");
   for (const args of [null, [], "secret", { path: 10 }]) assert.equal(toolStartLabel("read", args, "/repo"), "read");
   assert.equal(Array.from(toolStartLabel("write", { path: "😀".repeat(500) }, "/repo")).length, 167);
 });

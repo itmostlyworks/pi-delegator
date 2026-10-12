@@ -1,6 +1,5 @@
 import { relative, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { classifyBashTool } from "./bash-classification.ts";
 import type { DelegateProgress } from "./runner.ts";
 
 const RECENT_TOOL_LIMIT = 8;
@@ -23,11 +22,14 @@ export interface ProgressSummary {
 }
 
 export function toolStartLabel(toolName: string, args: unknown, cwd: string): string {
-  if (toolName === "bash") return classifyBashTool(args);
   const name = compactDisplayText(toolName, 12);
-  if (!["read", "grep", "find", "ls", "edit", "write"].includes(toolName)) return name;
   const record = typeof args === "object" && args !== null && !Array.isArray(args)
     ? args as Record<string, unknown> : {};
+  if (toolName === "bash") {
+    const command = typeof record.command === "string" ? compactDisplayText(record.command, 240) : "";
+    return command ? `${name} ${command}` : name;
+  }
+  if (!["read", "grep", "find", "ls", "edit", "write"].includes(toolName)) return name;
   const path = typeof record.path === "string" && record.path.trim() ? record.path : undefined;
   const target = path === undefined ? undefined : compactDisplayText(relative(cwd, resolve(cwd, path)) || ".", 160);
   const offset = toolName === "read" && Number.isSafeInteger(record.offset) && (record.offset as number) > 0

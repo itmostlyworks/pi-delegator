@@ -26,9 +26,8 @@ fixtures and lifecycle coverage; observed results live in [RELEASE_CHECK.md](REL
 | `src/delegate-mcp-extension.ts` | Opt-in native MCP extension with a delegate-owned transport factory. |
 | `src/delegate-mcp-transport.ts` | Session-contained stdio MCP servers, bounded protocol buffers, and idempotent group cleanup. |
 | `src/delegate-child-contract.ts` | Private child environment marker and reserved lifecycle exit codes. |
-| `src/display.ts` | Terminal-safe compact previews and observational tool/activity summaries. |
+| `src/display.ts` | Terminal-safe compact previews and observational tool/activity summaries, including Bash commands with arguments (up to 240 characters, whitespace normalized). |
 | `src/status.ts` | Session-local, event-driven active delegate footer counts; no lifecycle ownership. |
-| `src/bash-classification.ts` | Conservative Bash activity labels without rendering raw command arguments. |
 
 ## Session-owned background execution
 
